@@ -1,29 +1,57 @@
 
 MessageCreator = require "../system/MessageCreator"
 Player = require "../character/player/Player"
+BattleCache = require "./BattleCache"
+Constants = require "../system/Constants"
 
-_ = require "underscore"
+_ = require "lodash"
 _.str = require "underscore.string"
 chance = (new require "chance")()
 
 class Battle
-  constructor: (@game, @parties) ->
+
+  BAD_TURN_THRESHOLD: 100
+
+  constructor: (@game, @parties, @suppress = Constants.defaults.battle.suppress, @battleUrl = Constants.defaults.battle.showUrl) ->
     return if @parties.length < 2
+    @game.battle = @
     @startBattle()
+
+    return @cleanUpGlobals() if @isBad
+
     @endBattle()
 
   startBattle: ->
     @setupParties()
+
+    return if @isBad
+
+    @badTurns = 0
+    @battleCache = new BattleCache @game, @parties
+    @game.currentBattle = @
     @initializePlayers()
+    @link = Constants.defaults.battle.urlFormat.replace /%name/g, @battleCache.name.split(' ').join("%20")
+    @playerNames = @getAllPlayerNames()
+    @startMessage() if @suppress
     @beginTakingTurns()
+
+  startMessage: ->
+    if @battleUrl
+      message = ">>> BATTLE: #{@battleCache.name} has occurred involving #{@playerNames}. Check it out here: #{@link}"
+    else message = "#{@getAllStatStrings().join ' VS '}"
+    @broadcast message, {}, yes, no
 
   setupParties: ->
     _.each @parties, (party) =>
+      if not party
+        @game.errorHandler.captureException new Error "INVALID PARTY ??? ABORTING"
+        console.error @parties
+        @isBad = yes
+        return
+
       party.currentBattle = @
 
-  initializePlayers: ->
-    @calculateTurnOrder()
-
+  fixStats: ->
     _.each @turnOrder, (player) ->
       player.recalculateStats()
 
@@ -39,8 +67,11 @@ class Battle
         player.hp?.toMaximum()
         player.mp?.toMaximum()
       catch e
-        console.error e
-        console.error "FAILED TO SET HP ???? #{player.name}"
+        @game.errorHandler.captureException e
+
+  initializePlayers: ->
+    @calculateTurnOrder()
+    @fixStats()
 
   calculateTurnOrder: ->
     playerList = _.reduce @parties, ((prev, party) -> prev.concat party.players), []
@@ -77,6 +108,13 @@ class Battle
 
     string
 
+  getAllPlayerNames: ->
+    names = _.map @parties, (party) => @getAllPlayersInPartyNames party
+    _.str.toSentenceSerial _.flatten names
+
+  getAllPlayersInPartyNames: (party) ->
+    _.map party.players, (player) -> "<player.name>#{player.name}</player.name>"
+
   getAllPlayersInPartyStatStrings: (party) ->
     _.map party.players, (player) =>
       @stringifyStats player, @getRelevantStats player
@@ -84,6 +122,12 @@ class Battle
   getAllStatStrings: ->
     _.map @parties, (party) =>
       "#{(@getAllPlayersInPartyStatStrings party).join ', '}"
+
+  broadcast: (message, player = {}, ignoreSuppress = no, postToCache = yes) ->
+    @battleCache.addMessage message if postToCache
+    return if @suppress and not ignoreSuppress
+    message = MessageCreator.genericMessage message, player
+    @game.broadcast message
 
   playersAlive: ->
     parties = _.uniq _.pluck @turnOrder, 'party'
@@ -96,13 +140,19 @@ class Battle
 
     1 < aliveParties.length
 
+  checkIfOpponentHasBattleEffect: (turntaker, effect) ->
+    0 < _.reduce (_.difference @turnOrder, turntaker.party.players), ((prev, player) -> prev+player.calc[effect]()), 0
+
   beginTakingTurns: ->
     @emitEventToAll "battle.start", @turnOrder
+    @currentTurn = 1
     while @playersAlive()
       @turnPosition = @turnPosition or 0
 
+      return if @badTurns > @BAD_TURN_THRESHOLD
+
       if @turnPosition is 0
-        @game.broadcast MessageCreator.genericMessage "ROUND STATUS: #{@getAllStatStrings().join ' VS '}"
+        @broadcast "ROUND #{@currentTurn} STATUS: #{@getAllStatStrings().join ' VS '}"
         @emitEventToAll "round.start", @turnOrder
 
       @emitEventToAll "turn.start", player
@@ -114,16 +164,33 @@ class Battle
       if @turnPosition is @turnOrder.length
         @emitEventToAll "round.end", @turnOrder
         @turnPosition = 0
+        @currentTurn++
 
   takeTurn: (player) ->
     return if player.hp.atMin() or player.fled
-    if player.calc.cantAct() > 0
-      affectingCauses = player.calc.cantActMessages()
-      @game.broadcast MessageCreator.genericMessage MessageCreator.doStringReplace "#{_.str.toSentence affectingCauses}!", player
+
+    player.hp.add player.calc.stat "hpregen"
+    player.mp.add player.calc.stat "mpregen"
+
+    if (@checkIfOpponentHasBattleEffect player, "mindwipe") and (chance.bool {likelihood: 1})
+      @broadcast "#{player.name} was attacked by mindwipe! All personalities have now been turned off!"
+      player.removeAllPersonalities()
       return
 
-    if chance.bool {likelihood: player.calc.fleePercent()}
-      @game.broadcast MessageCreator.genericMessage MessageCreator.doStringReplace "<player.name>#{player.name}</player.name> has fled from combat!", player
+    if @currentTurn is 1 and @checkIfOpponentHasBattleEffect player, "startle"
+      message = "#{player.name} is startled!"
+      @broadcast message
+      @emitEventToAll "startled", player
+      return
+
+    if player.calc.cantAct() > 0
+      affectingCauses = player.calc.cantActMessages()
+      message = MessageCreator.doStringReplace "#{_.str.toSentence affectingCauses}!", player
+      @broadcast message
+      return
+
+    if (chance.bool {likelihood: player.calc.fleePercent()}) and not @checkIfOpponentHasBattleEffect player, "fear"
+      @broadcast "<player.name>#{player.name}</player.name> has fled from combat!", player
       player.fled = true
       @emitEventToAll "flee", player
       return
@@ -136,9 +203,23 @@ class Battle
     else
       @doMagicalAttack player, spellChosen
 
+  tryParry: (defender, attacker) ->
+    defenderParry = defender.calc.parry()
+    parryChance = Math.max 0, Math.min 100, 100 - defenderParry*10
+    return if (chance.bool {likelihood: parryChance})
+
+    @doPhysicalAttack defender, attacker, yes
+
   doPhysicalAttack: (player, target = null, isCounter = no) ->
-    target = _.sample _.reject @turnOrder, ((target) -> ((player.party is target.party) or target.hp.atMin() or target.fled)) if not target
+    if not target
+      enemies = _.reject @turnOrder, (target) -> (player.party is target.party) or target.hp.atMin() or target.fled
+      targets = player.calc.physicalAttackTargets enemies, @turnOrder
+      target = _.sample targets
+
     return if not target
+
+    battleMessage = (message, player) =>
+      @broadcast MessageCreator.doStringReplace message, player
 
     message = "<player.name>#{player.name}</player.name> is #{if isCounter then "COUNTER-" else ""}attacking <player.name>#{target.name}</player.name>"
 
@@ -146,13 +227,12 @@ class Battle
 
     dodgeChance = chance.integer {min: dodgeMin, max: Math.max dodgeMin+1, dodgeMax}
 
-    sendBattleMessage = (message, player) =>
-      @game.broadcast MessageCreator.genericMessage MessageCreator.doStringReplace message, player
-
     if dodgeChance <= 0
       message += ", but <player.name>#{target.name}</player.name> dodged!"
-      sendBattleMessage message, target
+      battleMessage message, target
       @emitEvents "dodge", "dodged", target, player
+      @tryParry target, player
+      @badTurns++
       return
 
     [hitMin, hitMax] = [-target.calc.hit(), player.calc.beatHit()]
@@ -161,45 +241,58 @@ class Battle
 
     if -(target.calc.stat 'luck') <= hitChance <= 0
       message += ", but <player.name>#{player.name}</player.name> missed!"
-      sendBattleMessage message, target
+      battleMessage message, target
       @emitEvents "miss", "missed", player, target
+      @tryParry target, player
+      @badTurns++
       return
 
     if hitChance < -(target.calc.stat 'luck')
       deflectItem = _.sample target.equipment
       message += ", but <player.name>#{target.name}</player.name> deflected it with %hisher <event.item.#{deflectItem.itemClass}>#{deflectItem.getName()}</event.item.#{deflectItem.itemClass}>!"
-      sendBattleMessage message, target
+      battleMessage message, target
       @emitEvents "deflect", "deflected", target, player
+      @tryParry target, player
+      @badTurns++
       return
-
-    @emitEvents "target", "targeted", player, target
 
     maxDamage = player.calc.damage()
     damage = chance.integer {min: player.calc.minDamage(), max: maxDamage}
 
     critRoll = chance.integer {min: 1, max: 10000}
 
-    if critRoll <= player.calc.criticalChance()
+    if critRoll <= player.calc.criticalChance() and not target.calc.aegis()
       damage = maxDamage
 
-    weapon = _.findWhere player.equipment, {type: "mainhand"}
-    message += ", and #{if damage is maxDamage then "CRITICALLY " else ""}hit with %hisher <event.item.#{weapon.itemClass}>#{weapon.getName()}</event.item.#{weapon.itemClass}> for <damage.hp>#{damage}</damage.hp> HP damage"
+    if damage is maxDamage and player.calc.lethal()
+      damage *= 1.5
 
-    @emitEvents "attack", "attacked", player, target
-    @emitEvents "critical", "criticalled", player, target if damage is maxDamage
-    @takeStatFrom player, target, damage, "physical", "hp"
-    @checkBattleEffects player, target
+    damage = target.calcDamageTaken damage
+
+    damageType = if damage < 0 then "healing" else "damage"
+    realDamage = Math.abs damage
+
+    weapon = _.findWhere player.equipment, {type: "mainhand"}
+    weapon = {itemClass: "basic", getName: -> return "claw"} if not weapon
+    message += ", and #{if damage is maxDamage then "CRITICALLY " else ""}hit with %hisher <event.item.#{weapon.itemClass}>#{weapon.getName()}</event.item.#{weapon.itemClass}> for <damage.hp>#{realDamage}</damage.hp> HP #{damageType}"
 
     fatal = no
-    if target.hp.atMin()
+    if target.hp.getValue() - damage <= 0 and not target.calc.sturdy()
       message += " -- a fatal blow!"
       fatal = yes
 
     else
       message += "!"
 
-    sendBattleMessage message, player
+    battleMessage message, player
 
+    @takeStatFrom player, target, damage, "physical", "hp"
+
+    @checkBattleEffects player, target if not fatal
+
+    @emitEvents "target", "targeted", player, target
+    @emitEvents "attack", "attacked", player, target
+    @emitEvents "critical", "criticalled", player, target if damage is maxDamage
     (@emitEvents "kill", "killed", player, target, {dead: target}) if fatal
 
   doMagicalAttack: (player, spellClass) ->
@@ -209,7 +302,11 @@ class Battle
   checkBattleEffects: (attacker, defender) ->
 
     effects = []
-    effects.push "Prone" if attacker.calc.prone() and chance.bool(likelihood: 15)
+    effects.push "Prone"    if attacker.calc.prone() and chance.bool(likelihood: 15)
+    effects.push "Shatter"  if attacker.calc.shatter() and chance.bool(likelihood: 10)
+    effects.push "Poison"   if attacker.calc.poison() and chance.bool(likelihood: 20)
+    effects.push "Venom"    if attacker.calc.venom() and chance.bool(likelihood: 5)
+    effects.push "Vampire"  if attacker.calc.vampire() and chance.bool(likelihood: 10)
     return if effects.length is 0
 
     @doBattleEffects effects, attacker, defender
@@ -218,7 +315,11 @@ class Battle
     findSpell = (name) => _.findWhere @game.spellManager.spells, name: name
 
     eventMap =
-      "Prone": ['effect.prone', 'effect.proned']
+      "Prone":   ['effect.prone', 'effect.proned']
+      "Shatter": ['effect.shatter', 'effect.shattered']
+      "Poison":  ['effect.poison', 'effect.poisoned']
+      "Venom":   ['effect.venom', 'effect.venomed']
+      "Vampire": ['effect.vampire', 'effect.vampired']
 
     _.each effects, (effect) =>
       spellProto = findSpell effect
@@ -229,10 +330,17 @@ class Battle
       spellInst.prepareCast()
 
   endBattle: ->
+
+    if @badTurns > @BAD_TURN_THRESHOLD
+      @emitEventToAll "battle.stale", @turnOrder
+      @broadcast "Thalynas, The Goddess of Destruction And Stopping Battles Prematurely decided that you mortals were taking too long. Try better to amuse her next time!", {}, not @battleUrl
+      @cleanUp()
+      return
+
     @emitEventToAll "battle.end", @turnOrder
     randomWinningPlayer = _.sample(_.filter @turnOrder, (player) -> (not player.hp.atMin()) and (not player.fled))
     if not randomWinningPlayer
-      @game.broadcast MessageCreator.genericMessage "Everyone died! The battle was a tie! You get nothing!"
+      @broadcast "Everyone died! The battle was a tie! You get nothing!", {}, not @battleUrl
       @cleanUp()
       return
 
@@ -242,21 +350,35 @@ class Battle
     @losingPlayers  = _.reject (_.difference @turnOrder, @winningParty.players), (player) -> player.fled
     @winningParty.players = _.reject @winningParty.players, (player) -> player.fled
 
-    @emitEventsTo "party.lose", @losingPlayers
-    @emitEventsTo "party.win",  @winningParty.players
+    @emitEventsTo "party.lose", @losingPlayers, @winningParty.players
+    @emitEventsTo "party.win",  @winningParty.players, @losingPlayers
 
-    @game.broadcast MessageCreator.genericMessage "The battle was won by <event.partyName>#{winnerName}</event.partyName>."
+    @broadcast "The battle was won by <event.partyName>#{winnerName}</event.partyName>.", {}, not @battleUrl
 
     @divvyXp()
     @cleanUp()
 
+  notifyParticipants: (e, docs) ->
+
+    _.chain(@turnOrder)
+    .filter (entity) -> entity instanceof Player
+    .each (player) =>
+      @game.eventHandler.broadcastEvent
+        sendMessage: no
+        extra: {battleId: docs[0]._id, linkTitle: @battleCache.name}
+        player: player
+        message: ">>> BATTLE: #{@battleCache.name} has occurred involving #{@playerNames}. Check it out here: #{@link}"
+        type: "combat"
+        link: @link
+
   divvyXp: ->
     deadVariables = {}
-    deadVariables.deadPlayers = @losingPlayers
+    deadVariables.deadPlayers = _.where @losingPlayers, {fled: false}
     deadVariables.numDead = deadVariables.deadPlayers.length
     deadVariables.deadPlayerTotalXp = _.reduce deadVariables.deadPlayers, ((prev, player) -> prev + player.xp.maximum), 0
     deadVariables.deadPlayerAverageXP = deadVariables.deadPlayerTotalXp / deadVariables.numDead
-    deadVariables.winningParty = @winningParty
+    deadVariables.winningParty =  @winningParty
+    combatWinners = _.where deadVariables.winningParty.players, {fled: false}
 
     winMessages = []
     loseMessages = []
@@ -264,9 +386,9 @@ class Battle
     xpMap = {}
 
     # winning player xp distribution
-    _.each @winningParty.players, (player) ->
+    _.each combatWinners, (player) ->
       return if player.isMonster
-      basePct = chance.integer min: 1, max: 6
+      basePct = chance.integer min: 1, max: Math.max 1, 6+player.calc.royal()
       basePctValue = Math.floor player.xp.maximum * (basePct/100)
 
       xpGain = player.personalityReduce 'combatEndXpGain', [player, deadVariables], basePctValue
@@ -279,10 +401,26 @@ class Battle
 
       xpMap[player] = xpGain
 
-    @game.broadcast MessageCreator.genericMessage (_.str.toSentence winMessages)+"!" if winMessages.length > 0
+    @broadcast (_.str.toSentence winMessages)+"!", {}, not @battleUrl if winMessages.length > 0
 
-    _.each @winningParty.players, (player) ->
+    _.each combatWinners, (player) ->
       player.gainXp xpMap[player]
+
+    # winning player gold distribution
+
+    winMessages = []
+
+    _.each combatWinners, (player) ->
+      return if player.isMonster
+
+      goldGain = player.personalityReduce 'combatEndGoldGain', [player, deadVariables]
+      goldGain = player.calcGoldGain goldGain
+
+      if goldGain > 0
+        player.gainGold goldGain
+        winMessages.push "<player.name>#{player.name}</player.name> gained <event.gold>#{goldGain}</event.gold> gold"
+
+    @broadcast (_.str.toSentence winMessages)+"!", {}, not @battleUrl if winMessages.length > 0
 
     # end winning
 
@@ -300,21 +438,49 @@ class Battle
       loseMessages.push "<player.name>#{player.name}</player.name> lost <event.xp>#{xpLoss}</event.xp>xp [<event.xp>#{pct}</event.xp>%]"
       xpMap[player] = xpLoss
 
-    @game.broadcast MessageCreator.genericMessage (_.str.toSentence loseMessages)+"!" if loseMessages.length > 0
+    @broadcast (_.str.toSentence loseMessages)+"!", {}, not @battleUrl if loseMessages.length > 0
 
     _.each deadVariables.deadPlayers, (player) ->
       player.gainXp -xpMap[player]
 
+    #losing player gold distribution
+
+    loseMessages = []
+
+    _.each deadVariables.deadPlayers, (player) ->
+      return if player.isMonster
+
+      goldLoss = player.personalityReduce 'combatEndGoldLoss', [player, deadVariables]
+      goldLoss = player.calcGoldGain goldLoss
+
+      if goldLoss > 0
+        player.gainGold -goldLoss
+        loseMessages.push "<player.name>#{player.name}</player.name> lost <event.gold>#{goldLoss}</event.gold> gold"
+
+    @broadcast (_.str.toSentence loseMessages)+"!", {}, not @battleUrl if loseMessages.length > 0
+
     # end losing
 
   cleanUp: ->
-    _.each @parties, (party) ->
+    _.each @parties, (party) =>
 
       _.each party.players, (player) ->
         player.clearAffectingSpells()
 
-      party.disband()
+      if party.isMonsterParty or party.shouldDisband (if party is @winningParty then 25 else 50)
+        party.disband()
 
+      else
+        party.finishAfterBattle()
+
+    @cleanUpGlobals()
+    @fixStats()
+
+    @battleCache.finalize @notifyParticipants.bind @
+    @game.currentBattle = null
+
+  cleanUpGlobals: ->
+    @game.battle = null
     @game.inBattle = false
 
   takeHp: (attacker, defender, damage, type, spell, message) ->
@@ -323,11 +489,21 @@ class Battle
   takeMp: (attacker, defender, damage, type, spell, message) ->
     @takeStatFrom attacker, defender, damage, type, "mp", spell, message
 
-  takeStatFrom: (attacker, defender, damage, type, damageType = "hp", spell, message = null) ->
+  takeStatFrom: (attacker, defender, damage, type, damageType = "hp", spell, message = null, doPropagate = no) ->
+
+    damage += attacker.calc.absolute()
+
+    darksideDamage = Math.round damage*(attacker.calc.darkside()*10/100)
+    damage += darksideDamage if darksideDamage > 0
 
     damage -= defender.calc?.damageTaken attacker, damage, type, spell, damageType
 
+    damage = Math.round damage
+
+    canFireSturdy = defender.hp.gtePercent 10
+
     defender[damageType]?.sub damage
+    defenderPunishDamage = if damage > 0 then Math.round damage*(defender.calc.punish()*5/100) else 0
 
     if damageType is "hp"
       if damage < 0
@@ -335,9 +511,17 @@ class Battle
       else
         @emitEvents "damage", "damaged", attacker, defender, type: type, damage: damage
 
+      if defender.calc.sturdy() and defender.hp.atMin() and canFireSturdy
+        defender.hp.set 1
+
       if defender.hp.atMin()
         defender.clearAffectingSpells()
         message = "#{message} [FATAL]" if message
+
+      if damage is 0
+        @badTurns++
+      else
+        @badTurns = 0
 
     else if damageType is "mp"
       if damage < 0
@@ -349,7 +533,17 @@ class Battle
       damage: Math.abs damage
 
     message = MessageCreator.doStringReplace message, attacker, extra
-    @game.broadcast MessageCreator.genericMessage message if message and typeof message is "string"
+    @broadcast message if message and typeof message is "string"
+
+    if defenderPunishDamage > 0 and not doPropagate
+      refmsg = "<player.name>#{defender.name}</player.name> reflected <damage.hp>#{defenderPunishDamage}</damage.hp> damage back at <player.name>#{attacker.name}</player.name>!"
+      @takeStatFrom defender, attacker, defenderPunishDamage, type, damageType, spell, refmsg, yes
+      @emitEvents "punish", "punished", defender, attacker
+
+    if darksideDamage > 0 and not doPropagate
+      refmsg = "<player.name>#{attacker.name}</player.name> took <damage.hp>#{darksideDamage}</damage.hp> damage due to darkside!"
+      @takeStatFrom attacker, attacker, darksideDamage, type, damageType, spell, refmsg, yes
+      @emitEventToAll "darkside", attacker
 
   emitEventToAll: (event, data) ->
     _.forEach @turnOrder, (player) ->
@@ -359,7 +553,7 @@ class Battle
         player.emit "combat.ally.#{event}", data
       else if data instanceof Player and player.party isnt data.party
         player.emit "combat.enemy.#{event}", data
-      else if event and event not in ['turn.end', 'turn.start']
+      else if event and event not in ['turn.end', 'turn.start', 'flee']
         player.emit "combat.#{event}", data
 
   emitEventsTo: (event, to, data) ->
@@ -367,7 +561,7 @@ class Battle
       player.emit "combat.#{event}", data
 
   emitEvents: (attackerEvent, defenderEvent, attacker, defender, extra = {}) ->
-    return if (not defender) or (not attacker)
+    return if (not defender) or (not attacker) or (not defender.party) or (not attacker.party)
     attacker.emit "combat.self.#{attackerEvent}", defender, extra
     _.forEach (_.without attacker.party.players, attacker), (partyMate) ->
       partyMate.emit "combat.ally.#{attackerEvent}", attacker, defender, extra

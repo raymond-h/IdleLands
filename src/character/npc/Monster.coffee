@@ -2,7 +2,7 @@
 Character = require "../base/Character"
 Equipment = require "../../item/Equipment"
 RestrictedNumber = require "restricted-number"
-_ = require "underscore"
+_ = require "lodash"
 chance = new (require "chance")()
 
 class Monster extends Character
@@ -11,6 +11,9 @@ class Monster extends Character
     baseStatItem = @pullOutStatsFrom options
     level = options.level
     super options
+
+    @level = new RestrictedNumber 0, 1000, 0
+    @identifier = Date.now()
 
     @gender = chance.gender().toLowerCase()
 
@@ -29,6 +32,8 @@ class Monster extends Character
     toClass = null
     toClassName = newClass
 
+    (toClassName = if chance.bool() then 'MagicalMonster' else 'Monster') if toClassName is 'Monster'
+
     try
       toClass = new (require "../classes/#{newClass}")()
     catch
@@ -38,10 +43,15 @@ class Monster extends Character
     @profession = toClass
     toClass.load @
     @professionName = toClassName
+    @recalculateStats()
 
   canEquip: (item) ->
     current = _.findWhere @equipment, {type: item.type}
     current.score() <= item.score() and @level.getValue()*15 >= item.score()
+
+  isBetterItem: (item) ->
+    current = _.findWhere @equipment, {type: item.type}
+    current.score() < item.score()
 
   generateBaseEquipment: ->
     @equipment = [

@@ -2,22 +2,32 @@
 Achievement = require "../base/Achievement"
 {toRoman} = require "roman-numerals"
 
+`/**
+  * This achievement is earned by achieving certain levels.
+  *
+  * @name Levelable
+  * @prerequisite Become level 5*[5*[n-1]+1].
+  * @reward +1 LUCK
+  * @category Achievements
+  * @package Player
+*/`
 class Levelable extends Achievement
 
   getAllAchievedFor: (player) ->
     baseStat = player.level.getValue()
 
-    currentCheckValue = 5
-    levelInterval = 5
+    currentCheckValue = 10
+    levelInterval = 10
     achieved = []
 
-    while baseStat >= currentCheckValue
+    while baseStat >= currentCheckValue and currentCheckValue <= 100
       level = currentCheckValue / levelInterval
       achieved.push
         name: "Levelable #{toRoman level}"
         desc: "Become level #{currentCheckValue}"
-        reward: "+1 luck"
+        reward: "+1 LUCK"
         luck: -> 1
+        type: "progress"
 
       currentCheckValue += levelInterval
 

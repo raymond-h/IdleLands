@@ -1,7 +1,14 @@
 
 Cataclysm = require "../Cataclysm"
-_ = require "underscore"
+_ = require "lodash"
 
+`/**
+  * This cataclysm runs every positive event on every player. See, it's not so bad, now is it?
+  *
+  * @name HopeRays
+  * @category Cataclysms
+  * @package Events
+*/`
 class HopeRays extends Cataclysm
   constructor: (game) ->
     super game, "hoperays"
@@ -15,8 +22,8 @@ class HopeRays extends Cataclysm
     _.each affected, (player) =>
       @affect player
       callback = ->
-      @game.eventHandler.doEventForPlayer player.name, callback, 'blessXp'
-      @game.eventHandler.doEventForPlayer player.name, callback, 'blessGold'
-      @game.eventHandler.doEventForPlayer player.name, callback, 'blessItem'
+      @game.eventHandler.doEventForPlayer player.name, 'blessXp', callback
+      @game.eventHandler.doEventForPlayer player.name, 'blessGold', callback
+      @game.eventHandler.doEventForPlayer player.name, 'blessItem', callback
 
 module.exports = exports = HopeRays

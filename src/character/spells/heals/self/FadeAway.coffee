@@ -5,10 +5,21 @@ MessageCreator = require "../../../../system/MessageCreator"
 class FadeAway extends Spell
   name: "fade away"
   @element = FadeAway::element = Spell::Element.heal
-  @cost = FadeAway::cost = 0
-
-  @restrictions =
-    "Rogue": 10
+  @tiers = FadeAway::tiers = [
+    `/**
+      * This spell recovers some stamina. Only selectable if you have <=25% hp.
+      *
+      * @name fade away
+      * @requirement {class} Rogue
+      * @requirement {level} 10
+      * @element heal
+      * @targets {self}
+      * @effect +30 Stamina
+      * @category Rogue
+      * @package Spells
+    */`
+    {name: "fade away", spellPower: 1, cost: 0, class: "Rogue", level: 10}
+  ]
 
   @canChoose = (caster) ->
     caster.special.ltePercent 25

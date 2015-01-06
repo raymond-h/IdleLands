@@ -48,7 +48,7 @@ class DatabaseWrapper
   remove: (query, options, callback) =>
     Q.when @databaseReady, =>
       if databaseEngine is 'mongo'
-        @db.remove query, {w:0}
+        @db.remove query, {w:0}, callback
       else
         @db.remove query, options, callback
 
@@ -72,18 +72,25 @@ class DatabaseWrapper
       else
         @db.find terms, callback
 
-  findForEach: (terms, callback) =>
+  findForEach: (terms, callback, context = null) =>
     if databaseEngine is 'mongo'
       Q.when @databaseReady, =>
-        @db.find(terms).stream().on 'data', (data) -> callback null, data
+        stream = @db.find(terms).stream()
+        stream.on 'error', (err) => @game.errorHandler.captureMessage err
+        stream.on 'data', (data) -> callback.call context, data
     else
       @db.find terms, (e, docs) ->
         docs.forEach (doc) ->
           callback e, doc
 
-  ensureIndex: (data, callback) =>
+  ensureIndex: (data, index) =>
     Q.when @databaseReady, =>
-      @db.ensureIndex data, callback
+      @db.ensureIndex data, index, ->
+
+  aggregate: (query, callback) =>
+    if databaseEngine is 'mongo'
+      Q.when @databaseReady, =>
+        @db.aggregate query, callback
 
   # Sorts documents by given properties to compare.
   # Each property in the object should either be

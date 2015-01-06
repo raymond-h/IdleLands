@@ -1,18 +1,35 @@
 
+_ = require "lodash"
 Spell = require "../../../base/Spell"
 
 class FrostBite extends Spell
   name: "frostbite"
   @element = FrostBite::element = Spell::Element.ice
-  @cost = FrostBite::cost = 100
-  @restrictions =
-    "Mage": 4
+  @tiers = FrostBite::tiers = [
+    `/**
+      * This spell does some damage, and has a small chance to stun for a few rounds afterwards.
+      *
+      * @name frostbite
+      * @requirement {class} Mage
+      * @requirement {mp} 100
+      * @requirement {level} 5
+      * @element ice
+      * @targets {enemy} 1
+      * @minDamage [int/6]
+      * @maxDamage [int/4]
+      * @duration 3 rounds
+      * effect {25%-chance} STUN
+      * @category Mage
+      * @package Spells
+    */`
+    {name: "frostbite", spellPower: 100, cost: 100, class: "Mage", level: 4}
+  ]
 
   cantAct: -> if @chance.bool({likelihood:25}) then 1 else 0
 
   cantActMessages: -> "%player is currently frostbitten"
 
-  calcDuration: -> super()+1
+  calcDuration: -> super()+3
 
   calcDamage: ->
     minStat = (@caster.calc.stat 'int')/6

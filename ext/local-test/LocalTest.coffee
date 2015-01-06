@@ -2,7 +2,7 @@
 finder = require "fs-finder"
 watch = require "node-watch"
 colors = require "cli-color"
-_ = require "underscore"
+_ = require "lodash"
 
 #### GAME CONSTANTS ####
 
@@ -66,6 +66,10 @@ w = getWrapper = -> IdleWrapper
 
 api = -> w().api
 inst = -> api().gameInstance
+pm = -> inst().playerManager
+player = -> api().player
+game = -> api().game
+gm = -> api().gm
 
 colorMap =
   "player.name":                colors.bold
@@ -75,15 +79,18 @@ colorMap =
   "event.damage":               colors.red
   "event.gold":                 colors.yellowBright
   "event.realGold":             colors.yellowBright
+  "event.shopGold":             colors.yellowBright
   "event.xp":                   colors.green
   "event.realXp":               colors.green
   "event.percentXp":            colors.green
   "event.item.newbie":          colors.whiteBright
-  "event.item.Normal":          colors.black
-  "event.item.basic":           colors.black
+  "event.item.Normal":          colors.whiteBright
+  "event.item.basic":           colors.whiteBright
   "event.item.pro":             colors.white
   "event.item.idle":            colors.cyan
   "event.item.godly":           colors.cyanBright
+  "event.item.custom":          colors.cyanBright
+  "event.item.guardian":        colors.cyan
   "event.finditem.scoreboost":  colors.bold
   "event.finditem.perceived":   colors.bold
   "event.finditem.real":        colors.bold
@@ -93,6 +100,8 @@ colorMap =
   "event.flip.value":           colors.bold
   "event.enchant.boost":        colors.bold
   "event.enchant.stat":         colors.bold
+  "event.tinker.boost":         colors.bold
+  "event.tinker.stat":          colors.bold
   "event.transfer.destination": colors.bold
   "event.transfer.from":        colors.bold
   "player.class":               colors.bold
@@ -103,26 +112,35 @@ colorMap =
   "damage.hp":                  colors.red
   "damage.mp":                  colors.blue
   "spell.turns":                colors.bold
-  "spell.spellName":            colors.bold
+  "spell.spellName":            colors.bold.underline
   "event.casterName":           colors.bold
-  "event.spellName":            colors.bold
+  "event.spellName":            colors.bold.underline
   "event.targetName":           colors.bold
   "event.achievement":          colors.bold
+  "event.guildName":            colors.bold.underline
 
 ## API call functions ##
 loadIdle = ->
-  IdleWrapper.load()
-  IdleWrapper.api.register.colorMap colorMap
-  IdleWrapper.api.register.broadcastHandler broadcastHandler, null
-  do loadAllPlayers
+  try
+    IdleWrapper.load()
+    IdleWrapper.api.game.handlers.colorMap colorMap
+    IdleWrapper.api.game.handlers.broadcastHandler broadcastHandler, null
+    do loadAllPlayers
+  catch e
+    console.error e
 
 registerAllPlayers = ->
   _.each hashes, (playerHashInList) ->
-    IdleWrapper.api.register.player {identifier: playerHashInList, name: playerHash[playerHashInList]}, null
+    IdleWrapper.api.player.auth.register {identifier: playerHashInList, name: playerHash[playerHashInList]}, null
 
 loadAllPlayers = ->
   _.each hashes, (playerHash) ->
-    IdleWrapper.api.add.player playerHash
+    IdleWrapper.api.player.auth.login playerHash
+
+adjustSpeed = ->
+  clearInterval IdleWrapper.api.gameInstance.playerManager.interval
+  IdleWrapper.api.gameInstance.playerManager.DELAY_INTERVAL = DELAY_INTERVAL
+  IdleWrapper.api.gameInstance.playerManager.beginGameLoop()
 
 gameLoop = ->
   doActionPerMember = (arr, action) ->
@@ -130,46 +148,34 @@ gameLoop = ->
       setTimeout (player, i) ->
         action player
       , DELAY_INTERVAL/arr.length*i, arr[i]
-	  
-  interval = setInterval =>
-    doActionPerMember hashes, IdleWrapper.api.game.nextAction
+
+  interval = setInterval ->
+    doActionPerMember hashes, IdleWrapper.api.player.takeTurn
   , DELAY_INTERVAL
   
 interactiveSession = ->
-  readline = require('readline')
+  readline = require 'readline'
 
   cli = readline.createInterface process.stdin, process.stdout, null
-  variables = {}
 
   cli.on 'line', (line) ->
-    clearInterval(interval)
+    clearInterval IdleWrapper.api.gameInstance.playerManager.interval
+    clearInterval interval
     cli.setPrompt "halted: c to continue> "
 
-    if (line) == ""
+    if line is ""
       cli.prompt()
-    else if (line) == "c"
+    else if line is "c"
+      do IdleWrapper.api.gameInstance.playerManager.beginGameLoop
       do gameLoop
     else
       try
-      # Replace variables with values from hash
-        _.each Object.keys(variables), (variable) ->
-          regex = new RegExp "%#{variable}%", 'g'
-          line = line.replace regex, variables[variable]
-
-        # Match if user tried to assign a variable
-        line.match /%(\w*)%=(.*)/
-
-        # Assign variables to hash table
-        if RegExp.$1 and RegExp.$2
-          variables[RegExp.$1] = RegExp.$2
-          line = RegExp.$2
-
         broadcast "Evaluating `#{line}`"
-        result = eval(line)
+        result = eval line
         broadcast result
-        variables['lc'] = line if result?
+        result?.then? (res) -> broadcast res.message
       catch error
-        console.error error.stack
+        console.error error.name, error.message, error.stack
       
       cli.prompt()
   
@@ -184,6 +190,8 @@ watchIdleFiles = ->
     _.each files, (file) ->
       delete require.cache[file]
 
+    clearInterval IdleWrapper.api.gameInstance.playerManager.interval
+    clearInterval interval
     loadFunction()
 #####################
 
@@ -193,6 +201,6 @@ do loadIdle
 do registerAllPlayers
 do loadAllPlayers
 do watchIdleFiles
+do adjustSpeed
 do gameLoop
 do interactiveSession
-do IdleWrapper.api.add.allData

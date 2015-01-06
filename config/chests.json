@@ -1,0 +1,19 @@
+{
+    "Draygon Gear": {
+        "items": [
+            "Draygon Armor",
+            "Draygon Helmet",
+            "Draygon Gloves",
+            "Draygon Greaves"
+        ]
+    },
+    "Christmas Gear": {
+        "items": [
+            "Red Tunic",
+            "Thick Winter Gloves",
+            "Decorative Red Pants",
+            "Heavy Winter Boots",
+	        "Magical Snowball"
+        ]
+    }
+}

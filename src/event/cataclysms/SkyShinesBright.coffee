@@ -1,7 +1,14 @@
 
 Cataclysm = require "../Cataclysm"
-_ = require "underscore"
+_ = require "lodash"
 
+`/**
+  * This cataclysm gives you some brightening experiences.
+  *
+  * @name SkyShinesBright
+  * @category Cataclysms
+  * @package Events
+*/`
 class SkyShinesBright extends Cataclysm
   constructor: (game) ->
     super game, "skybrightshine"
@@ -15,6 +22,6 @@ class SkyShinesBright extends Cataclysm
     _.each affected, (player) =>
       @affect player
       callback = ->
-      @game.eventHandler.doEventForPlayer player.name, callback, 'blessXp'
+      @game.eventHandler.doEventForPlayer player.name, 'blessXp', callback
 
 module.exports = exports = SkyShinesBright

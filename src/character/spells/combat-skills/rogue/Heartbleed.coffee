@@ -5,15 +5,31 @@ class Heartbleed extends Spell
   name: "heartbleed"
   stat: @stat = "special"
   @element = Heartbleed::element = Spell::Element.physical
-  @cost = Heartbleed::cost = 15
-  @restrictions =
-    "Rogue": 15
+  @tiers = Heartbleed::tiers = [
+    `/**
+      * This skill does a small amount of damage and leaves a mean DoT on the target, which does 7% hp / round.
+      *
+      * @name heartbleed
+      * @requirement {class} Rogue
+      * @requirement {Stamina} 15
+      * @requirement {level} 3
+      * @element physical
+      * @targets {enemy} 1
+      * @prerequisite {used-skill} chain stab
+      * @minDamage 0.2*[str+dex]/2
+      * @maxDamage 0.5*[str+dex]/2
+      * @duration 2 rounds
+      * @category Rogue
+      * @package Spells
+    */`
+    {name: "heartbleed", spellPower: 1, cost: 15, class: "Rogue", level: 15}
+  ]
 
   @canChoose = (caster) -> caster.profession.lastComboSkill in ['chain stab']
 
   calcDamage: ->
-    minStat = (@caster.calc.stats ['str', 'dex']) * 0.3
-    maxStat = (@caster.calc.stats ['str', 'dex']) * 0.7
+    minStat = ((@caster.calc.stats ['str', 'dex']) / 2) * 0.2
+    maxStat = ((@caster.calc.stats ['str', 'dex']) / 2) * 0.5
     super() + @minMax minStat, maxStat
 
   calcDuration: -> super() + 2

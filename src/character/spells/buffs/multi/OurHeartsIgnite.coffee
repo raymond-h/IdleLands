@@ -4,27 +4,43 @@ Spell = require "../../../base/Spell"
 class OurHeartsIgnite extends Spell
   name: "Our Hearts Ignite"
   @element = OurHeartsIgnite::element = Spell::Element.buff
-  @cost = OurHeartsIgnite::cost = 300
-  @restrictions =
-    "Bard": 1
+  @tiers = OurHeartsIgnite::tiers = [
+    `/**
+      * This spell buffs the str and con of your allies.
+      *
+      * @name Our Hearts Ignite
+      * @requirement {class} Bard
+      * @requirement {mp} 300
+      * @requirement {level} 1
+      * @element buff
+      * @targets {ally} all
+      * @effect +[caster.int/4] str
+      * @effect +[caster.wis/4] con
+      * @duration 3 rounds
+      * @category Bard
+      * @package Spells
+    */`
+    {name: "Our Hearts Ignite", spellPower: 1, cost: 300, class: "Bard", level: 1}
+  ]
 
   calcDuration: -> super()+3
 
   determineTargets: ->
     @targetAllAllies()
 
-  str: -> (@caster.calc.stat 'int')/4
+  str: -> @storedInt
   
-  con: -> (@caster.calc.stat 'wis')/4
+  con: -> @storedWis
 
-  cast: (player) ->
-    return if @caster isnt player
+  init: ->
+    @storedInt = (@caster.calc.stat 'int')/4
+    @storedWis = (@caster.calc.stat 'wis')/4
     message = "%casterName begins playing \"%spellName!\""
-    @broadcast player, message
+    @broadcast @caster, message
 
   tick: (player) ->
     return if @caster isnt player
-    message = "%casterName continues to ignite the hearts of %hisher teammates!"
+    message = "%casterName continues to ignite the hearts of %hisher teammates with \"%spellName!\""
     @broadcastBuffMessage player, message
 
   uncast: (player) ->
@@ -35,8 +51,8 @@ class OurHeartsIgnite extends Spell
   constructor: (@game, @caster) ->
     super @game, @caster
     @bindings =
-      doSpellCast: @cast
+      doSpellInit: @init
       doSpellUncast: @uncast
-      "combat.self.turn.end": @tick
+      "combat.round.end": @tick
 
 module.exports = exports = OurHeartsIgnite

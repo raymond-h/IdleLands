@@ -4,17 +4,31 @@ Spell = require "../../../base/Spell"
 class Fortify extends Spell
   name: "fortify"
   @element = Fortify::element = Spell::Element.buff
-  @cost = Fortify::cost = 300
-  @restrictions =
-    "Generalist": 15
+  @tiers = Fortify::tiers = [
+    `/**
+      * This spell buffs the max HP of the caster.
+      *
+      * @name Fortify
+      * @requirement {class} Generalist
+      * @requirement {mp} 300
+      * @requirement {level} 15
+      * @element buff
+      * @targets {self}
+      * @effect +20% hp
+      * @duration 7 rounds
+      * @category Generalist
+      * @package Spells
+    */`
+    {name: "fortify", spellPower: 1, cost: 300, class: "Generalist", level: 15}
+  ]
 
-  calcDuration: -> super()+3
+  calcDuration: -> super()+7
 
   determineTargets: ->
     @caster
 
   calcDamage: ->
-    Math.floor @caster.hp.getValue() * 0.1
+    Math.floor @caster.hp.getValue() * 0.2
 
   cast: (player) ->
     message = "%casterName cast %spellName!"

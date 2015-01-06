@@ -1,9 +1,29 @@
 
 Class = require "./../base/Class"
 
+`/**
+  * This class performs many deadly combos on its foes. Beware the finishing blow.
+  *
+  * @name Rogue
+  * @physical
+  * @dps
+  * @hp 70+[level*10]+[con*6]
+  * @mp [level*1]+[int*1]
+  * @special Stamina (The Rogue gets 100 stamina with which they can use skills that combo their foes.)
+  * @itemScore con*2 + agi*1.5 + dex*1.5 - int - wis - luck*0.2
+  * @statPerLevel {str} 2
+  * @statPerLevel {dex} 4
+  * @statPerLevel {con} 2
+  * @statPerLevel {int} 1
+  * @statPerLevel {wis} 0
+  * @statPerLevel {agi} 4
+  * @minDamage 37%
+  * @category Classes
+  * @package Player
+*/`
 class Rogue extends Class
 
-  baseHp: 30
+  baseHp: 70
   baseHpPerLevel: 10
   baseHpPerCon: 6
 

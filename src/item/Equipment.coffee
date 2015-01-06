@@ -1,19 +1,22 @@
-_ = require "underscore"
+_ = require "lodash"
 
 class Equipment
 
   constructor: (options) ->
     _.extend @, _.defaults options, Equipment.defaults
-    @_baseScore = @score()
+    @_baseScore = ~~@score()
     @foundAt = new Date()
+    @uid = Date.now()
+    @itemClass = options.itemClass if options.itemClass
     #console.error "ERROR in equipment constructor, name=#{@name}, type=#{@type}" if not @name or not @type
 
   score: ->
     ret = 0
     for attr, mult of Equipment.multipliers
-      ret += @[attr]*mult if attr of @
-    @_calcScore = ret
-    parseInt ret
+      ret += @[attr]*mult if attr of @ and @[attr]
+
+    ret = parseInt ret
+    ~~@_calcScore = ret
 
   getName: ->
     if @enchantLevel then "+#{@enchantLevel} #{@name}" else @name
@@ -31,14 +34,17 @@ class Equipment
     water: 0.3
     earth: 0.3
     thunder: 0.3
+    holy: 1
 
     gold: 2
-    xp: 3
+    xp: 7
 
-    hp: 4
-    mp: 2
+    hp: 0.5
+    mp: 0.2
+    hpregen: 4
+    mpregen: 2
 
-    luck: 4.5
+    luck: 5.5
 
     strPercent: 6
     dexPercent: 6
@@ -51,25 +57,53 @@ class Equipment
     waterPercent: 2
     earthPercent: 2
     thunderPercent: 2
+    holyPercent: 5
 
     goldPercent: 10
-    xpPercent: 13
+    xpPercent: 27
 
-    hpPercent: 20
-    mpPercent: 13
+    hpPercent: 5
+    mpPercent: 3
+    hpregenPercent: 10
+    mpregenPercent: 6
 
-    enchantLevel: -25
+    enchantLevel: -125
 
     luckPercent: 20
 
-    crit: 20
-    dodge: 20
-    prone: 20
-    power: 20
-    silver: 20
-    deadeye: 20
-    defense: 20
-    glowing: 20
+    crit: 100
+    dance: 100
+    aegis: 100
+    prone: 100
+    power: 100
+    silver: 100
+    deadeye: 100
+    defense: 100
+    glowing: 100
+    sacred: -150
+    forsaken: 150
+    limitless: 500
+    royal: 200
+    haste: 300
+    sturdy: 400
+    lethal: 200
+    shatter: 400
+    poison: 200
+    venom: 300
+    vampire: 350
+    mindwipe: 5000
+    startle: 250
+    fear: 400
+    parry: 450
+    punish: 450
+    darkside: 300
+    damageReduction: 10
+
+    sticky: 1000
+
+    absolute: 7
+
+    sentimentality: 0.4
 
   @defaults =
     itemClass: "basic"
@@ -81,7 +115,6 @@ class Equipment
     agi: 0
     luck: 0
     sentimentality: 0
-    piety: 0
     ice: 0
     fire: 0
     water: 0
@@ -97,8 +130,6 @@ class Equipment
     wisPercent: 0
     agiPercent: 0
     luckPercent: 0
-    sentimentalityPercent: 0
-    pietyPercent: 0
     icePercent: 0
     firePercent: 0
     waterPercent: 0

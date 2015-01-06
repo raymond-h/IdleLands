@@ -5,15 +5,31 @@ class WomboCombo extends Spell
   name: "wombo combo"
   stat: @stat = "special"
   @element = WomboCombo::element = Spell::Element.physical
-  @cost = WomboCombo::cost = 25
-  @restrictions =
-    "Rogue": 25
+  @tiers = WomboCombo::tiers = [
+    `/**
+      * This skill hits multiple times for a moderate amount of damage.
+      *
+      * @name wombo combo
+      * @requirement {class} Rogue
+      * @requirement {Stamina} 25
+      * @requirement {level} 25
+      * @element physical
+      * @targets {enemy} 1
+      * @prerequisite {used-skill} chain stab
+      * @prerequisite {used-skill} heartbleed
+      * @minDamage 0.45*[str+dex]/2
+      * @maxDamage 0.50*[str+dex]/2
+      * @category Rogue
+      * @package Spells
+    */`
+    {name: "wombo combo", spellPower: 1, cost: 25, class: "Rogue", level: 25}
+  ]
 
   @canChoose = (caster) -> caster.profession.lastComboSkill in ['chain stab', 'heartbleed']
 
   calcDamage: ->
-    minStat = (@caster.calc.stats ['str', 'dex']) * 0.45
-    maxStat = (@caster.calc.stats ['str', 'dex']) * 0.5
+    minStat = ((@caster.calc.stats ['str', 'dex']) / 2) * 0.45
+    maxStat = ((@caster.calc.stats ['str', 'dex']) / 2) * 0.5
     super() + @minMax minStat, maxStat
 
   cast: (player) ->

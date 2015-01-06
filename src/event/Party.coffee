@@ -1,5 +1,5 @@
 
-_ = require "underscore"
+_ = require "lodash"
 _.str = require "underscore.string"
 MessageCreator = require "../system/MessageCreator"
 chance = new (require "chance")()
@@ -8,45 +8,44 @@ class Party
   constructor: (@game, players) ->
     players = [players] if not _.isArray players
     @players = []
+    @name = @pickPartyName()
     if (not players) or players.length < 1
       @disband()
       return
     @recruit players
-    @name = @pickPartyName()
     @addGlobally()
 
   score: ->
     _.reduce @players, ((prev, player) -> prev + player.calc.totalItemScore()), 0
 
+  level: ->
+    (_.reduce @players, ((prev, player) -> prev + player.level.getValue()), 0) / @players.length
+
   getPartyName: ->
     if @players.length > 1 then @name else @players[0].name
 
-  genNullPartyName: ->
-    "The Null Party #{chance.integer min: 1, max: 1000}"
-
   pickPartyName: ->
-    return @genNullPartyName() if not Party::partyGrammar?
-    format = _.sample Party::partyGrammar
-    return @genNullPartyName() if not format?
-    arr =  format.split(" ")
-    _.str.clean (_.reduce arr, (sentence, word) ->
-      repl = null
-      switch (word.trim())
-        when '%noun%'
-          repl = _.sample Party::nouns
-        when '%preposition%'
-          repl = _.sample Party::prepositions
-        when '%article%'
-          repl = _.sample Party::articles
-        when '%adjective%'
-          repl = _.sample Party::adjectives
-        when '%conjunction%'
-          repl = _.sample Party::conjunctions
-        else
-          repl = word.trim()
-      sentence.push(repl?.trim())
-      return sentence
-    ,[]).join(" ").trim()
+    @game.componentDatabase.generatePartyName()
+
+  prepareForBattle: ->
+    _.each @players, (player) =>
+      pet = @game.petManager.getActivePetFor player
+      return if not pet
+      @addPlayer pet if pet.tryToJoinCombat()
+
+    if chance.bool({likelihood: 1})
+      deity = _.sample @game.componentDatabase.generatorCache.deity
+      deityMon = @game.monsterGenerator.generateScalableMonster @, @score(), deity
+      deityMon.isPet = yes
+      @addPlayer deityMon
+
+  finishAfterBattle: ->
+    _(@players)
+      .filter (player) -> player.isPet
+      .each (pet) => @playerLeave pet, yes
+
+  shouldDisband: (basePercent = 0) ->
+    chance.bool likelihood: Math.max 0, Math.min 100, basePercent+(_.reduce @players, ((prev, player) -> prev + player.calc.partyLeavePercent()), 0)/@players.length
 
   addGlobally: ->
     if not @game.parties
@@ -59,10 +58,10 @@ class Party
 
   recruit: (players) ->
     _.forEach players, (player) =>
-      return if player of @players
+      return if player in @players
       player.emit "player.party.join"
       player.party = @
-      player.partyName = if @players.length > 1 then @name else ''
+      player.partyName = @name
       @players.push player
 
   playerLeave: (player, forced = no) ->
@@ -72,11 +71,16 @@ class Party
 
     # forced = yes means disband() called this
     if not forced
+
+      message = ''
+
       if @players.length <= 1
         @disband()
-        player.playerManager.game.broadcast MessageCreator.genericMessage "<player.name>#{player.name}</player.name> has disbanded <event.partyName>#{@name}</event.partyName>." if not forced
+        message = "<player.name>#{player.name}</player.name> has disbanded <event.partyName>#{@name}</event.partyName>."
       else
-        player.playerManager.game.broadcast MessageCreator.genericMessage "<player.name>#{player.name}</player.name> has left <event.partyName>#{@name}</event.partyName>."
+        message = "<player.name>#{player.name}</player.name> has left <event.partyName>#{@name}</event.partyName>."
+
+      @game.eventHandler.broadcastEvent {message: message, player: player, type: 'party'}
 
     player.party = null
 

@@ -4,9 +4,23 @@ Spell = require "../../../base/Spell"
 class Treatment extends Spell
   name: "treatment"
   @element = Treatment::element = Spell::Element.heal & Spell::Element.buff
-  @cost = Treatment::cost = 400
-  @restrictions =
-    "Generalist": 7
+  @tiers = Treatment::tiers = [
+    `/**
+      * This spell heals a certain percentage of health over time.
+      *
+      * @name treatment
+      * @requirement {class} Generalist
+      * @requirement {mp} 450
+      * @requirement {level} 7
+      * @element heal, buff
+      * @targets {ally} 1
+      * @effect +15% hp
+      * @duration 3 rounds
+      * @category Generalist
+      * @package Spells
+    */`
+    {name: "treatment", spellPower: 1, cost: 450, class: "Generalist", level: 7}
+  ]
 
   calcDuration: -> super()+3
 
@@ -14,7 +28,7 @@ class Treatment extends Spell
     @targetSomeAllies()
 
   calcDamage: (player) ->
-    Math.floor (player.hp.maximum * 0.1)
+    Math.floor (player.hp.maximum * 0.15)
 
   cast: (player) ->
     message = "%casterName began treating %targetName's wounds with %spellName!"

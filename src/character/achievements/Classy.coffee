@@ -2,13 +2,22 @@
 Achievement = require "../base/Achievement"
 
 requireDir = require "require-dir"
-_ = require "underscore"
+_ = require "lodash"
 
 classProtos = requireDir "../classes"
 classList = _.pluck classProtos, 'name'
 
 baseStats = ['Str', 'Dex', 'Con', 'Agi', 'Int', 'Wis', 'Luck']
 
+`/**
+  * This achievement is earned by becoming a new class.
+  *
+  * @name Classy
+  * @prerequisite Become a new class.
+  * @reward Varies, depending on the class.
+  * @category Achievements
+  * @package Player
+*/`
 class Classy extends Achievement
 
   getAllAchievedFor: (player) ->
@@ -23,6 +32,7 @@ class Classy extends Achievement
         name: "Classy: #{className}"
         desc: "Become a #{className}"
         reward: ""
+        type: "class"
 
       currentProto = classProtos[className].prototype
 

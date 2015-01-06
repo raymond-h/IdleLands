@@ -1,9 +1,11 @@
 
 RestrictedNumber = require "restricted-number"
 EventEmitter2 = require("eventemitter2").EventEmitter2
-_ = require "underscore"
+_ = require "lodash"
+Q = require "q"
 Personality = require "./Personality"
 Constants = require "../../system/Constants"
+chance = new (require "chance")()
 
 class Character extends EventEmitter2
 
@@ -20,9 +22,10 @@ class Character extends EventEmitter2
 
     @
 
-  moveAction: ->
+  resetMaxXp: ->
+    @xp.maximum = @levelUpXpCalc @level.getValue()
 
-  combatAction: ->
+  moveAction: ->
 
   clearAffectingSpells: ->
     return if not @spellsAffectedBy
@@ -33,7 +36,7 @@ class Character extends EventEmitter2
 
     @spellsAffectedBy = []
 
-  personalityReduce: (appFunctionName, args = [], baseValue = 0) ->
+  probabilityReduce: (appFunctionName, args = [], baseObject) ->
     args = [args] if not _.isArray args
     array = []
     .concat @profession ? []
@@ -41,8 +44,36 @@ class Character extends EventEmitter2
     .concat @spellsAffectedBy ? []
     .concat @achievements ? []
 
+    baseProbabilities = if baseObject then [baseObject] else []
+
+    probabilities = _.reduce array, (combined, iter) ->
+      applied = if _.isFunction iter?[appFunctionName] then iter?[appFunctionName]?.apply iter, args else iter?[appFunctionName]
+      combined.push applied if applied?.result.length > 0
+      combined
+    , baseProbabilities
+
+    return probabilities[0] if probabilities.length < 2
+
+    sortedProbabilities = _.sortBy probabilities, (prob) -> prob.probability
+    sum = _.reduce sortedProbabilities, ((prev, prob) -> prev + prob.probability), 0
+    sortedProbabilities[i].probability = sortedProbabilities[i].probability + sortedProbabilities[i-1].probability for i in [1...sortedProbabilities.length]
+    chosenInt = chance.integer {min: 0, max: sum}
+    (_.reject sortedProbabilities, (val) -> val.probability < chosenInt)[0]
+
+  personalityReduce: (appFunctionName, args = [], baseValue = 0) ->
+    args = [args] if not _.isArray args
+    array = []
+    .concat @profession ? []
+    .concat @personalities ? []
+    .concat @spellsAffectedBy ? []
+    .concat @achievements ? []
+    .concat @playerManager?.game.calendar.getDateEffects()
+    .concat @calendar?.game.calendar.getDateEffects() # for monsters
+    .concat @getRegion?()
+    .concat @playerManager?.game.guildManager.guildHash[@guild]?.buffs ? []
+
     _.reduce array, (combined, iter) ->
-      applied = iter?[appFunctionName]?.apply iter, args
+      applied = if _.isFunction iter?[appFunctionName] then iter?[appFunctionName]?.apply iter, args else iter?[appFunctionName]
       if _.isArray combined
         combined.push applied if applied
       else
@@ -53,17 +84,12 @@ class Character extends EventEmitter2
 
   rebuildPersonalityList: ->
     _.each @personalities, (personality) =>
-      personality.unbind @
+      personality.unbind? @
 
     @personalities = _.map @personalityStrings, (personality) =>
       Personality::createPersonality personality, @
 
-  addPersonality: (newPersonality) ->
-    return no if not Personality::doesPersonalityExist newPersonality
-
-    potentialPersonality = Personality::getPersonality newPersonality
-    return no if not ('canUse' of potentialPersonality) or not potentialPersonality.canUse @
-
+  _addPersonality: (newPersonality, potentialPersonality) ->
     if not @personalityStrings
       @personalityStrings = []
       @personalities = []
@@ -74,12 +100,35 @@ class Character extends EventEmitter2
 
     @personalities = _.uniq @personalities
     @personalityStrings = _.uniq @personalityStrings
-    yes
+
+  addPersonality: (newPersonality) ->
+    if not Personality::doesPersonalityExist newPersonality
+      return Q {isSuccess: no, code: 30, message: "That personality doesn't exist (they're case sensitive)!"}
+
+    potentialPersonality = Personality::getPersonality newPersonality
+    if not ('canUse' of potentialPersonality) or not potentialPersonality.canUse @
+      return Q {isSuccess: no, code: 31, message: "You can't use that personality yet!"}
+
+    @_addPersonality newPersonality, potentialPersonality
+
+    personalityString = @personalityStrings.join ", "
+
+    Q {isSuccess: yes, code: 33, message: "Your personality settings have been updated successfully! Personalities are now: #{personalityString or "none"}"}
 
   removePersonality: (oldPersonality) ->
+    if not @hasPersonality oldPersonality
+      return Q {isSuccess: no, code: 32, message: "You don't have that personality set!"}
+
     @personalityStrings = _.without @personalityStrings, oldPersonality
     @rebuildPersonalityList()
-    yes
+
+    personalityString = @personalityStrings.join ", "
+
+    Q {isSuccess: yes, code: 33, message: "Your personality settings have been updated successfully! Personalities are now: #{personalityString or "none"}"}
+
+  removeAllPersonalities: ->
+    @personalityStrings = []
+    @rebuildPersonalityList()
 
   hasPersonality: (personality) ->
     return no if not @personalityStrings
@@ -91,7 +140,23 @@ class Character extends EventEmitter2
   calcXpGain: (xp) ->
     @calc.stat 'xp', yes, xp
 
+  calcDamageTaken: (baseDamage) ->
+    multiplier = @calc.damageMultiplier()
+    if baseDamage > 0
+      damage = (baseDamage - @calc.damageReduction()) * multiplier
+      damage = 0 if damage < 0
+      damage
+    else baseDamage*multiplier
+
+  modifyRelationshipWith: (playerName, value) ->
+    @rapport = {} if not @rapport
+    @rapport[playerName] = 0 if not @rapport[playerName]
+
+    @rapport[playerName] += value
+
   canEquip: (item) ->
+    return yes if (-1 isnt item.equippedBy.indexOf(if @isPet then @createdAt else @name))
+
     current = _.findWhere @equipment, {type: item.type}
     current.score() <= item.score()
 
@@ -100,12 +165,46 @@ class Character extends EventEmitter2
     @equipment = _.without @equipment, current
     @equipment.push item
 
+    @addToEquippedBy item
+
+    @permanentAchievements.hasFoundForsaken = yes if item.forsaken
+    @permanentAchievements.hasFoundSacred   = yes if item.sacred
+
+  addToEquippedBy: (item) ->
+    item.equippedBy = [] if not item.equippedBy
+    item.equippedBy.push if @isPet then @createdAt else @name
+    item.equippedBy = _.uniq item.equippedBy
+
+  calculateYesPercent: ->
+    Math.min 100, (Math.max 0, Constants.defaults.player.defaultYesPercent + @personalityReduce 'calculateYesPercentBonus')
+
   recalculateStats: ->
+
+    @calc.itemFindRange()
+
+    # force a recalculation
+    @calc.stats ['str', 'dex', 'con', 'int', 'agi', 'luck', 'wis', 'water', 'fire', 'earth', 'ice', 'thunder']
+
     @hp.maximum = @calc.hp()
     @mp.maximum = @calc.mp()
 
   levelUpXpCalc: (level) ->
     Math.floor 100 + (400 * Math.pow level, 1.71)
+
+  calcLuckBonusFromValue: (value) ->
+    tiers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 15, 25, 35, 50, 65, 75, 85, 100, 125, 150, 175, 200, 225, 250, 300, 350, 400, 450, 500]
+
+    postMaxTierDifference = 100
+
+    bonus = 0
+
+    for i in [0..tiers.length]
+      bonus++ if value >= tiers[i]
+
+    if value >= tiers[tiers.length-1]
+      bonus++ while value > tiers[tiers.length-1] += postMaxTierDifference
+
+    bonus
 
   gainXp: ->
   gainGold: ->
@@ -113,6 +212,7 @@ class Character extends EventEmitter2
   loadCalc: ->
     @calc =
       base: {}
+      statCache: {}
       self: @
       stat: (stat, ignoreNegative = yes, base = 0, basePct = 0) ->
         pct = "#{stat}Percent"
@@ -120,30 +220,357 @@ class Character extends EventEmitter2
         @base[pct] = _.reduce @self.equipment, ((prev, item) -> prev+(item[pct] or 0)), basePct
 
         baseVal = @self.personalityReduce stat, [@self, @base[stat]], @base[stat]
-        percent = @self.personalityReduce pct, [@self, @base[pct]], @base[pct]
+        @statCache[pct] = percent = @self.personalityReduce pct, [@self, @base[pct]], @base[pct]
 
-        newValue = Math.floor baseVal/percent
-        newValue = if _.isFinite newValue then newValue else 0
+        combinedVal = Math.round(baseVal*(1+percent/100))
+        combinedVal = 0 if _.isNaN combinedVal or (not ignoreNegative and combinedVal < 0)
+        @statCache[stat] = combinedVal
 
-        newValue = 0 if not ignoreNegative and newValue < 0
-
-        combinedVal = baseVal+newValue
-        combinedVal = 0 if _.isNaN combinedVal
         combinedVal
 
       stats: (stats) ->
-        _.reduce stats, ((prev, stat) => prev+@stat stat), 0
+        _.reduce stats, ((prev, stat) => prev+@self.calc.stat stat), 0
 
-      crit:     -> @self.calc.stat 'crit'
+      #`/**
+      # * Absolute adds a static amount of damage to all of your attacks.
+      # *
+      # * @name absolute
+      # * @combat
+      # * @stacks yes (Stacking formula is +1 damage/absolute point)
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
+      absolute: -> Math.max 0, @self.calc.stat 'absolute'
+
+      #`/**
+      # * Aegis prevents critical hits.
+      # *
+      # * @name aegis
+      # * @combat
+      # * @stacks no
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
+      aegis: -> 0 < @self.calc.stat 'aegis'
+
+      #`/**
+      # * Crit adds a bonus to your critical chance.
+      # *
+      # * @name crit
+      # * @combat
+      # * @stacks yes (Stacking formula is 100/crit point)
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
+      crit: -> Math.max 0, @self.calc.stat 'crit'
+
+      #`/**
+      # * Dance doubles your base dodge chance.
+      # *
+      # * @name dance
+      # * @combat
+      # * @stacks no
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
       dance:    -> 0 < @self.calc.stat 'dance'
-      defense:  -> @self.calc.stat 'defense'
-      prone:    -> 0 < @self.calc.stat 'prone'
+
+      #`/**
+      # * Darkside makes it so you do more damage, but all of the bonus damage is taken by both the attacker and defender.
+      # *
+      # * @name darkside
+      # * @combat
+      # * @stacks yes (Stacking formula is 10%/darkside point)
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
+      darkside:  -> Math.max 0, @self.calc.stat 'darkside'
+
+      #`/**
+      # * Deadeye doubles your chance to overcome the opponents dodge roll.
+      # *
+      # * @name deadeye
+      # * @combat
+      # * @stacks no
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
+      deadeye:  -> 0 < Math.max 0, @self.calc.stat 'deadeye'
+
+      #`/**
+      # * Defense adds a +10% boost to all of your defensive calculations.
+      # *
+      # * @name defense
+      # * @combat
+      # * @stacks yes (Stacking formula is 10%/defense point)
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
+      defense:  -> Math.max 0, @self.calc.stat 'defense'
+
+      #`/**
+      # * Drunk changes your movements ever-so-slightly.
+      # *
+      # * @name drunk
+      # * @stacks yes
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
+      drunk:  -> Math.max 0, @self.calc.stat 'drunk'
+
+      #`/**
+      # * Fear makes it so no opponents can flee combat. Works well on Jesters!
+      # *
+      # * @name fear
+      # * @combat
+      # * @stacks yes
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
+      fear:  -> @self.calc.stat 'fear'
+
+      #`/**
+      # * Glowing adds +5% to each of your combat calculations. It's pretty crazy.
+      # *
+      # * @name glowing
+      # * @combat
+      # * @stacks yes (Stacking formula is 5%/glowing point)
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
+      glowing:  -> Math.max 0, @self.calc.stat 'glowing'
+
+      #`/**
+      # * Haste allows you to take one additional step per point of haste. You only gain xp for your first 5 steps.
+      # *
+      # * @name haste
+      # * @stacks yes (Stacking formula is +1 step/haste point)
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
+      haste:    -> Math.max 0, @self.calc.stat 'haste'
+
+      #`/**
+      # * Lethal makes all of your critical hits even more critical, so they deal 150% damage.
+      # *
+      # * @name lethal
+      # * @combat
+      # * @stacks no
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
+      lethal:   -> 0 < @self.calc.stat 'lethal'
+
+      #`/**
+      # * Mindwipe makes the target forget that they have any personalities.
+      # *
+      # * @name mindwipe
+      # * @combat
+      # * @stacks no
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
+      mindwipe:    -> 0 < @self.calc.stat 'mindwipe'
+
+      #`/**
+      # * Parry allows you the chance to counterattack if you dodge, deflect, or are missed by an attack.
+      # *
+      # * @name parry
+      # * @combat
+      # * @stacks yes (Stacking formula is +10% parry chance/parry point)
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
+      parry:    -> @self.calc.stat 'parry'
+
+      #`/**
+      # * Poison is a small DoT that does damage based on the attackers wisdom.
+      # *
+      # * @name poison
+      # * @combat
+      # * @stacks no
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
+      poison:    -> 0 < @self.calc.stat 'poison'
+
+      #`/**
+      # * Power adds a flat +10% to maximum damage possible.
+      # *
+      # * @name power
+      # * @combat
+      # * @stacks no
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
       power:    -> 0 < @self.calc.stat 'power'
-      offense:  -> @self.calc.stat 'offense'
-      glowing:  -> @self.calc.stat 'glowing'
-      deadeye:  -> @self.calc.stat 'deadeye'
+
+      #`/**
+      # * Prone gives you the opportunity to stun an opponent when you physically hit them. The chance of a stun happening is 15%.
+      # *
+      # * @name prone
+      # * @combat
+      # * @stacks no
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
+      prone:    -> 0 < @self.calc.stat 'prone'
+
+      #`/**
+      # * Punish allows you to return some damage back to the attacker.
+      # *
+      # * @name punish
+      # * @combat
+      # * @stacks yes (Stacking formula is +5% returned damage/punish point)
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
+      punish:    -> Math.max 0, @self.calc.stat 'punish'
+
+      #`/**
+      # * Offense adds a +10% boost for each of your offensive calculations.
+      # *
+      # * @name offense
+      # * @combat
+      # * @stacks yes (Stacking formula is 10%/offense point)
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
+      offense:  -> Math.max 0, @self.calc.stat 'offense'
+
+      #`/**
+      # * Royal adds +1% xp gain at the end of combat. It also can go negative, which lowers your xp gain cap at the end of combat!
+      # *
+      # * @name royal
+      # * @combat
+      # * @stacks yes (Stacking formula is 1%/royal point)
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
+      royal:  -> @self.calc.stat 'royal'
+
+      #`/**
+      # * Shatter has a chance to destroy the opponents defenses for a few turns.
+      # *
+      # * @name shatter
+      # * @combat
+      # * @stacks no
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
+      shatter:   -> 0 < @self.calc.stat 'shatter'
+
+      #`/**
+      # * Silver increases your minimum damage range by +10%.
+      # *
+      # * @name silver
+      # * @combat
+      # * @stacks no
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
       silver:   -> 0 < @self.calc.stat 'silver'
+
+      #`/**
+      # * Startle allows you to take away your opponents first turns.
+      # *
+      # * @name startle
+      # * @combat
+      # * @stacks no
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
+      startle:  -> @self.calc.stat 'startle'
+
+      #`/**
+      # * Sturdy allows you to survive a fatal attack with 1 hp.
+      # *
+      # * @name sturdy
+      # * @combat
+      # * @stacks no
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
+      sturdy:  -> Math.max 0, @self.calc.stat 'sturdy'
+
+      #`/**
+      # * Vampire is a DoT that returns health to the attacker. The duration is determined by how many points of vampire the caster has.
+      # *
+      # * @name vampire
+      # * @combat
+      # * @stacks yes (Stacking formula is 1 turn/vampire point)
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
+      vampire:    -> Math.max 0, @self.calc.stat 'vampire'
+
+      #`/**
+      # * Venom is a small DoT that does a static percentage of the victims health as damage.
+      # *
+      # * @name venom
+      # * @combat
+      # * @stacks no
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
+      venom:    -> 0 < @self.calc.stat 'venom'
+
+      #`/**
+      # * Vorpal increases your minimum and maximum damage by +50%
+      # *
+      # * @name vorpal
+      # * @combat
+      # * @stacks no
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
       vorpal:   -> 0 < @self.calc.stat 'vorpal'
+
+      #`/**
+      # * Forsaken makes it so every blessItem, flipStat, or forsakeItem hits this item. In the event that
+      # * there are multiple forsaken items in your inventory, one will be chosen at random.
+      # *
+      # * @name forsaken
+      # * @stacks no
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
+
+      #`/**
+      # * Limitless allows an item to exceed the enchantment level cap of 10.
+      # *
+      # * @name limitless
+      # * @stacks no
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
+
+      #`/**
+      # * Sacred makes it so there is no chance of this item being hit by blessItem, flipStat, or forsakeItem.
+      # *
+      # * @name sacred
+      # * @stacks no
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
+
+      #`/**
+      # * Sentimentality does nothing except take up valuable equipment score.
+      # *
+      # * @name sentimentality
+      # * @stacks no
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
+
+      #`/**
+      # * Sticky makes it harder to have your item be replaced (or easier, if you have negative sticky).
+      # *
+      # * @name sticky
+      # * @stacks yes
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
 
       boosts: (stats, baseValue) ->
         Math.floor _.reduce stats, (prev, stat) =>
@@ -159,11 +586,11 @@ class Character extends EventEmitter2
 
       hp: ->
         @base.hp = @self.calc.stat 'hp'
-        Math.max 1, @base.hp
+        Math.round Math.max 1, @base.hp
 
       mp: ->
         @base.mp = @self.calc.stat 'mp'
-        Math.max 0, @base.mp
+        Math.round Math.max 0, @base.mp
 
       dodge: ->
         @base.dodge = @self.calc.stat 'agi'
@@ -193,7 +620,7 @@ class Character extends EventEmitter2
         @base.damage = Math.max 10, @self.calc.stats ['str']
         value = @self.personalityReduce 'damage', [@self, @base.damage], @base.damage
         value += @self.calc.boosts ['power', 'offense', 'glowing', 'vorpal'], @base.damage
-        value
+        Math.round value
 
       minDamage: ->
         @base.minDamage = 1
@@ -201,6 +628,23 @@ class Character extends EventEmitter2
         value = @self.personalityReduce 'minDamage', [@self, @base.minDamage], @base.minDamage
         value += @self.calc.boosts ['silver', 'offense', 'glowing', 'vorpal'], maxDamage
         Math.min value, maxDamage-1
+
+      #`/**
+      # * Damage reduction makes it so you take less damage.
+      # *
+      # * @name damageReduction
+      # * @combat
+      # * @stacks yes (Stacking formula is -1 damage / damageReduction point)
+      # * @category Equipment Effects
+      # * @package Item
+      # */`
+      damageReduction: ->
+        @base.damageMultiplier = 0
+        @self.personalityReduce 'damageReduction', [@self, @base.damageReduction], @base.damageReduction
+
+      damageMultiplier: ->
+        @base.damageMultiplier = 1
+        @self.personalityReduce 'damageMultiplier', [@self, @base.damageMultiplier], @base.damageMultiplier
 
       criticalChance: ->
         @base.criticalChance = 1 + ((@self.calc.stats ['luck', 'dex']) / 2)
@@ -220,20 +664,32 @@ class Character extends EventEmitter2
         @base.combatEndXpLoss = Math.floor self.xp.maximum / 10
         @self.personalityReduce 'combatEndXpLoss', [@self, @base.combatEndXpLoss], @base.combatEndXpLoss
 
+      combatEndGoldGain: (oppParty) ->
+        @base.combatEndGoldGain = 0
+        @self.personalityReduce 'combatEndGoldGain', [@self, oppParty, @base.combatEndGoldGain], @base.combatEndGoldGain
+
+      combatEndGoldLoss: ->
+        @base.combatEndXpLoss = Math.floor self.xp.maximum / 10
+        @self.personalityReduce 'combatEndGoldLoss', [@self, @base.combatEndGoldLoss], @base.combatEndGoldLoss
+
       itemFindRange: ->
-        @base.itemFindRange = (@self.level.getValue()+1) * @self.calc.itemFindRangeMultiplier()
+        @base.itemFindRange = (@self.level.getValue()+1) * Constants.defaults.player.defaultItemFindModifier * @self.calc.itemFindRangeMultiplier()
         @self.personalityReduce 'itemFindRange', [@self, @base.itemFindRange], @base.itemFindRange
 
       itemFindRangeMultiplier: ->
-        @base.itemFindRangeMultiplier = Constants.defaults.player.defaultItemFindModifier
-        @self.personalityReduce 'itemFindRangeMultipler', [@self, @base.itemFindRangeMultiplier], @base.itemFindRangeMultiplier
+        @base.itemFindRangeMultiplier = 1 + (0.2 * Math.floor @self.level.getValue()/10)
+        @self.personalityReduce 'itemFindRangeMultiplier', [@self, @base.itemFindRangeMultiplier], @base.itemFindRangeMultiplier
 
       itemScore: (item) ->
-        baseValue = item.score()
-        Math.floor @self.personalityReduce 'itemScore', [@self, item, baseValue], baseValue
+        if not item?.score and not item?._calcScore then @self.playerManager.game.errorHandler.captureError (new Error "Bad item for itemScore calculation"), extra: item
+        baseValue = item?.score?() or item?._calcScore or 0
+        (Math.floor @self.personalityReduce 'itemScore', [@self, item, baseValue], baseValue) + @self.itemPriority item
 
       totalItemScore: ->
-        _.reduce @self.equipment, ((prev, item) -> prev+item.score()), 0
+        _.reduce @self.equipment, ((prev, item) =>
+          if not item?.score and not item?._calcScore then @self.playerManager.game.errorHandler.captureError (new Error "Bad item for totalItemScore calculation"), extra: item
+          prev+(item?.score?() or item?._calcScore or 0)
+        ), 0
 
       itemReplaceChancePercent: ->
         @base.itemReplaceChancePercent = 100
@@ -250,7 +706,7 @@ class Character extends EventEmitter2
       skillCrit: (spell) ->
         @base.skillCrit = 1
         @self.personalityReduce 'skillCrit', [@self, spell, @base.skillCrit], @base.skillCrit
-        
+
       itemSellMultiplier: (item) ->
         @base.itemSellMultiplier = 0.05
         @self.personalityReduce 'itemSellMultiplier', [@self, item, @base.itemSellMultiplier], @base.itemSellMultiplier
@@ -266,6 +722,10 @@ class Character extends EventEmitter2
       cantActMessages: ->
         baseValue = []
         @self.personalityReduce 'cantActMessages', [@self, baseValue], baseValue
+
+      luckBonus: ->
+        @baseValue = @self.calcLuckBonusFromValue @self.calc.stat 'luck'
+        @self.personalityReduce 'luckBonus', [@self, @baseValue], @baseValue
 
       fleePercent: ->
         @base.fleePercent = 0.1
@@ -298,6 +758,14 @@ class Character extends EventEmitter2
       fallChance: ->
         @base.fallChance = 100
         Math.max 0, Math.min 100, @self.personalityReduce 'fallChance', [@self, @base.fallChance], @base.fallChance
+
+      physicalAttackTargets: (allEnemies, allCombatMembers) ->
+        allEnemies = {probability: 100, result: allEnemies} if _.isArray allEnemies
+        (@self.probabilityReduce 'physicalAttackTargets', [@self, allEnemies, allCombatMembers], allEnemies).result
+
+      magicalAttackTargets: (allEnemies, allCombatMembers) ->
+        allEnemies = {probability: 100, result: allEnemies} if _.isArray allEnemies
+        (@self.probabilityReduce 'magicalAttackTargets', [@self, allEnemies, allCombatMembers], allEnemies).result
 
 Character::num2dir = (dir,x,y) ->
   switch dir

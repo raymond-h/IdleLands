@@ -1,8 +1,6 @@
 Map = require "./Map"
-_ = require "underscore"
+_ = require "lodash"
 fs = require "fs"
-
-Datastore = require "../system/DatabaseWrapper"
 
 class World
 

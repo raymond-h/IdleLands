@@ -1,6 +1,30 @@
 
 Class = require "./../base/Class"
 
+`/**
+  * This class is a physically powerful class. Their Rage is a powerful force that drastically
+  * increases their STR. Rage is accumulated by taking damage and watching allies die. Each point of rage
+  * adds to the Barbarians damage multiplier. They have an overall reduction in dex and agi to make up for their
+  * bulky nature. They also take half damage on physical attacks.
+  *
+  * @name Barbarian
+  * @special Rage (The Barbarian gets Rage so they can power themselves up while they get beaten up.)
+  * @physical
+  * @tank
+  * @hp 200+[level*25]+[con*10]
+  * @mp 0level*-10]+[int*-5]
+  * @itemScore con*2 + str*2 - wis - int
+  * @statPerLevel {str} 6
+  * @statPerLevel {dex} 2
+  * @statPerLevel {con} 6
+  * @statPerLevel {int} -3
+  * @statPerLevel {wis} -3
+  * @statPerLevel {agi} 0
+  * @minDamage 40%
+  * @hpregen 5%
+  * @category Classes
+  * @package Player
+*/`
 class Barbarian extends Class
 
   baseHp: 200
@@ -26,6 +50,8 @@ class Barbarian extends Class
 
   physicalAttackChance: (player) ->
     if player.special.getValue() > 70 then 30 else 5
+
+  hpregen: (player) -> Math.floor(player.hp.maximum*0.05)
 
   minDamage: (player) ->
     player.calc.damage()*0.40

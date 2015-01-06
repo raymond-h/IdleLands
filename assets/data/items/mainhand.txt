@@ -1,7 +1,7 @@
 # mostly str
-"bit" int=1 prone
+"bit" int=1 prone=1
 "ice cream cone" str=1 ice=1
-"arrow" str=3 deadeye
+"arrow" str=3 deadeye=1
 "spoon" str=4
 "rusty spoon" str=5
 "sharp stick" str=6 vorpal=1
@@ -98,7 +98,7 @@
 "eight-by-four" str=208
 "bastardsword" str=214
 "party cannon" str=220
-"muramasa" str=226 piety=250 silver=1
+"muramasa" str=226 silver=1
 "bloodsword" str=232 power=1 vorpal=1
 "sleepsword" str=238
 "flaming arrow" str=244 fire=50
@@ -154,7 +154,7 @@
 "Deathbringer" str=1000 vorpal=1
 "Kusanagi" str=1100
 "Smashing Board" str=1200
-"Turbo Jet Engine" str=1300 dodge=1
+"Turbo Jet Engine" str=1300 dance=1
 "durganball" str=1350
 "Dragonball" str=1400
 "Blade of Infinity" str=1500 offense=1 vorpal=1 silver=1 crit=1
@@ -186,7 +186,7 @@
 "orange creamsicle" int=47 ice=10
 "chinese finger trap" int=49 prone=1
 "flip-phone" int=51
-"crosier" int=53 silver
+"crosier" int=53 silver=1
 "subway sub" int=57 luck=7
 "rod" int=59
 "scepter" int=61
@@ -216,7 +216,7 @@
 "d8" int=104
 "reflector" int=105
 "knitting needles" int=107
-"king of hearts" int=109 offense=1 sentimentality=10
+"king of hearts" int=109 offense=1 sentimentality=100
 "queen of clubs" int=111 offense=1
 "jack of diamonds" int=113 offense=1
 "chunk of ice" int=115 ice=50 offense=1
@@ -275,7 +275,7 @@
 "Nuclear Reactor" int=1200 firePercent=10
 "Absolute Zero Chamber" int=1300 icePercent=10
 "Masterball" int=1400 deadeye=1
-"Staff of Infinity" int=1500 offense=1 sentimentalityPercent=25
+"Staff of Infinity" int=1500 offense=1 sentimentality=25
 
 # hybrid int / str
 "cupcake" int=3 str=3
@@ -293,9 +293,9 @@
 "blazier" fire=300 str=110 int=70
 "swordcane" str=150 int=50 luck=11
 "sunsword" str=170 int=55
-"murasame" str=218 int=60 piety=250
-"masamune" str=235 int=80 silver=1 piety=500
-"mythblade" str=90 int=267 piety=150
+"murasame" str=218 int=60
+"masamune" str=235 int=80 silver=1
+"mythblade" str=90 int=267
 "flametongue" str=100 int=305 fire=150
 "icebrand" str=110 int=305 ice=80
 "mjollnir" str=335 int=200 thunder=150
@@ -309,8 +309,8 @@
 "popsicle" str=630 int=400 ice=200 prone=1
 "Ziltoid's Touch" int=350 str=350 silver=1 offense=1 defense=1 dancing=1
 "MadCatz Tournament Edition Arcade Stick" int=595 str=200
-"book: 49 shades of idling" str=375 int=375
-"Book: 50 Shadows over Idletopia" str=400 int=400
+"book: 49 shades of idlin'" str=375 int=375
+"Book: 50 Shadows over Idliathlia" str=400 int=400
 "book: 28 days idlier" str=425 int=425
 
 # hybrid str / agi
@@ -347,14 +347,17 @@
 "downvote" str=250 int=-50 wis=-50
 "wad o' cash" str=350 int=100 wis=-50
 "tomato" str=275 agi=75 dex=85
-"peculiar object" str=400 int=-300 wis=-200 energy=500 glowing=3
+"peculiar object" str=400 int=-300 wis=-200 mp=500 glowing=3
 
 # 4 stat hybrids
 "Banhammer" str=350 int=100 wis=100 con=-100
 "homeless person" str=500 int=200 wis=-100 dex=400
 
 # idle-class
-"Wingsaber, Whirling Blade of the Idling Gods" str=5000
+"Wingsaber, Whirling Blade of the Idling Gods" str=5000 silver=1 offense=1 prone=1
 
 # godly-class
-"Godly Imagination" str=5000 int=5000
+"Godly Imagination" str=5000 int=3500
+
+# celestial something or another
+"Celestial Cutlass" str=1000 dex=1000 con=1000 agi=1000 wis=1000 luck=1000 glowing=1 parry=1 offense=1 power=1 silver=1

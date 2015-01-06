@@ -8,7 +8,7 @@
 "kite shield" con=20
 "aegis" con=37 aegis=1
 "turtle shell" con=59 defense=1
-"Holy Arms" con=777 piety=400
+"Holy Arms" con=777
 
 # str / con
 "girdle" str=1 con=2
@@ -49,11 +49,11 @@
 "keyboard" con=30 int=10
 
 # con / agi
-"wing" con=17 agi=20 dodge=1
+"wing" con=17 agi=20 dance=1
 "clock" con=35 agi=20
 
 # wis / str
-"upvote" wis=200 piety=50 str=-50
+"upvote" wis=200 str=-50
 
 # 3-stat
 "pie plate" dex=5 con=-3 agi=4
@@ -70,7 +70,10 @@
 "Magnetic Field" str=-30 con=50 dex=50 wis=50 thunder=100 luck=10
 
 # idle-class
-"Supersonic Shield of the Idling Gods" con=5000 str=1500 defense=1
+"Supersonic Shield of the Idling Gods" con=1000 str=1500 defense=1 aegis=1
 
 # godly-class
-"The Solar System" con=10000
+"Solar System" con=3000
+
+# celestial something or another
+"Celestial Cover" str=1000 dex=1000 con=1000 agi=1000 wis=1000 luck=1000 glowing=1 parry=1 defense=2 sturdy=1

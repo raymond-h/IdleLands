@@ -4,9 +4,25 @@ Spell = require "../../../base/Spell"
 class BluntHit extends Spell
   name: "blunt hit"
   @element = BluntHit::element = Spell::Element.physical
-  @cost = BluntHit::cost = 100
-  @restrictions =
-    "Fighter": 13
+  @tiers = BluntHit::tiers = [
+    `/**
+      * This skill stuns an opponent and does a bit of damage to them.
+      *
+      * @name blunt hit
+      * @requirement {class} Fighter
+      * @requirement {mp} 100
+      * @requirement {level} 13
+      * @element physical
+      * @targets {enemy} 1
+      * @minDamage str/6
+      * @minDamage str/4
+      * @duration 1 round
+      * @effect STUN
+      * @category Fighter
+      * @package Spells
+    */`
+    {name: "blunt hit", spellPower: 1, cost: 100, class: "Fighter", level: 13}
+  ]
 
   cantAct: -> 1
 

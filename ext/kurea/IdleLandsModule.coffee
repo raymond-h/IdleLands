@@ -1,5 +1,6 @@
 BotManager = require("../../../../core/BotManager").BotManager
-_ = require "underscore"
+_ = require "lodash"
+_.str = require "underscore.string"
 Q = require "q"
 
 finder = require "fs-finder"
@@ -24,7 +25,7 @@ module.exports = (Module) ->
     userIdentsList: []
     userIdents: {}
 
-    topic: "Welcome to Idletopia! New player? Join ##idlebot & read https://github.com/seiyria/IdleLands/wiki/New-Player-Guide | Got feedback? Send it to https://github.com/seiyria/IdleLands | Check your stats: http://kurea.link/idle"
+    topic: "Welcome to Idliathlia! New player? Join ##idlebot & read http://new.idle.land | Got feedback? Send it to http://git.idle.land | Check your stats: http://idle.land/"
 
     colorMap:
       "player.name":                c.bold
@@ -34,6 +35,7 @@ module.exports = (Module) ->
       "event.damage":               c.red
       "event.gold":                 c.olive
       "event.realGold":             c.olive
+      "event.shopGold":             c.olive
       "event.xp":                   c.green
       "event.realXp":               c.green
       "event.percentXp":            c.green
@@ -41,8 +43,10 @@ module.exports = (Module) ->
       "event.item.Normal":          c.gray
       "event.item.basic":           c.gray
       "event.item.pro":             c.purple
-      "event.item.idle":            c.rainbow
+      "event.item.idle":            c.bold.rainbow
       "event.item.godly":           c.white.bgblack
+      "event.item.custom":          c.white.bgblue
+      "event.item.guardian":        c.cyan
       "event.finditem.scoreboost":  c.bold
       "event.finditem.perceived":   c.bold
       "event.finditem.real":        c.bold
@@ -52,6 +56,8 @@ module.exports = (Module) ->
       "event.flip.value":           c.bold
       "event.enchant.boost":        c.bold
       "event.enchant.stat":         c.bold
+      "event.tinker.boost":         c.bold
+      "event.tinker.stat":          c.bold
       "event.transfer.destination": c.bold
       "event.transfer.from":        c.bold
       "player.class":               c.italic
@@ -66,16 +72,20 @@ module.exports = (Module) ->
       "event.casterName":           c.bold
       "event.spellName":            c.underline
       "event.targetName":           c.bold
-      "event.achievement":          c.underlines
+      "event.achievement":          c.underline
+      "event.guildName":            c.underline
 
     loadIdle: (stopIfLoaded) ->
       @buildUserList()
       if not (stopIfLoaded and @idleLoaded)
         @idleLoaded = true
-        @IdleWrapper.load()
-        @IdleWrapper.api.register.broadcastHandler @sendMessageToAll, @
-        @IdleWrapper.api.register.colorMap @colorMap
-        @IdleWrapper.api.register.playerLoadHandler @getAllUsers
+        try
+          @IdleWrapper.load()
+          @IdleWrapper.api.game.handlers.broadcastHandler @sendMessageToAll, @
+          @IdleWrapper.api.game.handlers.colorMap @colorMap
+          @IdleWrapper.api.game.handlers.playerLoadHandler @getAllUsers
+        catch e
+          console.error e
 
     addServerChannel: (bot, server, channel) =>
       IdleModule::serverBots[server] = bot if not IdleModule::serverBots[server]
@@ -114,13 +124,13 @@ module.exports = (Module) ->
       @userIdentsList.push ident
       @userIdentsList = _.uniq @userIdentsList
 
-      @IdleWrapper.api.add.player ident, suppress
+      @IdleWrapper.api.player.auth.login ident, suppress
 
     removeUser: (ident) ->
       return if not ident or not _.contains @userIdentsList, ident
       @userIdentsList = _.without @userIdentsList, ident
 
-      @IdleWrapper.api.remove.player ident
+      @IdleWrapper.api.player.auth.logout ident
 
     buildUserList: ->
       for server, channels of @serverChannels
@@ -157,12 +167,12 @@ module.exports = (Module) ->
           , DELAY_INTERVAL/arr.length*i, arr[i]
 
       @interval = setInterval =>
-        doActionPerMember @userIdentsList, @IdleWrapper.api.game.nextAction
+        doActionPerMember @userIdentsList, (identifier) => @IdleWrapper.api.player.takeTurn identifier, no
       , DELAY_INTERVAL
 
     watchIdleFiles: ->
       loadFunction = _.debounce (=>@loadIdle()), 100
-      watch idlePath, {}, () =>
+      watch idlePath, {}, () ->
         files = finder.from(idlePath).findFiles("*.coffee")
 
         _.forEach files, (file) ->
@@ -228,6 +238,15 @@ module.exports = (Module) ->
           @removeUser @generateIdent bot.config.server, oldNick
           @addUser @generateIdent bot.config.server, newNick
 
+      `/**
+        * Start the game on the server this is run on. Used when linking new IRC networks.
+        *
+        * @name idle-start
+        * @syntax !idle-start
+        * @gmOnly
+        * @category IRC Commands
+        * @package Client
+      */`
       @addRoute "idle-start", "idle.game.start", (origin) =>
         [channel, server] = [origin.channel, origin.bot.config.server]
         @db.update { channel: channel, server: server },
@@ -237,6 +256,15 @@ module.exports = (Module) ->
         @addServerChannel origin.bot, server, channel
         @broadcast "#{origin.bot.config.server}/#{origin.channel} has joined the Idle Lands network!"
 
+      `/**
+        * Stop the game server on the server this is run on.
+        *
+        * @name idle-stop
+        * @syntax !idle-stop
+        * @gmOnly
+        * @category IRC Commands
+        * @package Client
+      */`
       @addRoute "idle-stop", "idle.game.stop", (origin, route) =>
         [channel, server] = [origin.channel, origin.bot.config.server]
         @db.update { channel: channel, server: server },
@@ -249,16 +277,6 @@ module.exports = (Module) ->
       registerCommand = (origin, route) =>
         [bot, name] = [origin.bot, route.params.name]
 
-        name = name.trim()
-        
-        if name.length < 2
-          @reply origin, "You have to make your name above 2 characters!"
-          return
-
-        if name.length > 20
-          @reply origin, "You have to keep your name under 20 characters!"
-          return
-
         bot.userManager.getUsername origin, (e, username) =>
           if not username
             @reply origin, "You must be logged in to services play this game!"
@@ -270,98 +288,204 @@ module.exports = (Module) ->
 
           identifier = @generateIdent origin.bot.config.server, username
 
-          @IdleWrapper.api.register.player
+          (@IdleWrapper.api.player.auth.register
             identifier: identifier
             name: name
-          , null, (status) =>
-            if not status.success
-              @reply origin, "You're already registered a character to that ident!"
-            else if status.message
-              @reply origin, status.message
+          ).then (res) =>
+            @reply origin, res.message
 
+      `/**
+        * Register a new character on this IRC network.
+        *
+        * @name idle-register
+        * @syntax !idle-register Character Name
+        * @category IRC Commands
+        * @package Client
+      */`
       @addRoute "idle-register :name", registerCommand
       @addRoute "register :name", registerCommand
 
-      @addRoute 'idle-event ":player" :event?', "idle.game.gm", (origin, route) =>
+      `/**
+        * Run any event for any logged in player.
+        *
+        * @name idle-event
+        * @syntax !idle-event "Player Name" eventType
+        * @gmOnly
+        * @category IRC Commands
+        * @package Client
+      */`
+      @addRoute 'idle-event ":player" :event', "idle.game.gm", (origin, route) =>
         [player, event] = [route.params.player, route.params.event]
-        @IdleWrapper.api.game.doEvent player, event, (did) =>
+        @IdleWrapper.api.gm.event.single player, event, (did) =>
           @reply origin, "Your event is done." if did
           @reply origin, "Your event failed (the player wasn't found)." if _.isUndefined did
           @reply origin, "Your event has failed (mysterious error, check the logs, or the event was just negative)." if did is false
 
+      `/**
+        * Run a global event (cataclysms, PvP battles, etc).
+        *
+        * @name idle-globalevent
+        * @gmOnly
+        * @syntax !idle-globalevent eventType
+        * @category IRC Commands
+        * @package Client
+      */`
       @addRoute 'idle-globalevent :event?', "idle.game.gm", (origin, route) =>
         event = route.params.event
-        @IdleWrapper.api.game.doGlobalEvent event, (did) =>
+        @IdleWrapper.api.gm.event.global event, (did) =>
           @reply origin, "Your event is done." if did
           @reply origin, "Your event failed (something weird went wrong)." if not did
 
-      @addRoute 'idle-update', 'idle.game.gm', (origin) =>
-        @IdleWrapper.api.game.update()
+      `/**
+        * Reset a password for a player.
+        *
+        * @gmOnly
+        * @syntax !idle-resetpassword "identifier" "newPassword"
+        * @example !idle-resetpassword "local-server/Danret" "my new awesome password"
+        * @category IRC Commands
+        * @package Client
+      */`
+      @addRoute 'idle-resetpassword ":identifier" ":newPassword"', "idle.game.gm", (origin, route) =>
+        [identifier, password] = [route.params.identifier, route.params.newPassword]
+        @gameInstance.playerManager.storePasswordFor identifier, password
 
-      @addRoute "idle-add event yesno \":question\" \":affirm\" \":deny\"", "idle.game.gm", (origin, route) =>
-        [question, affirm, deny] = [route.params.question, route.params.affirm, route.params.deny]
-        @IdleWrapper.api.add.yesno question, affirm, deny
+      `/**
+        * Force the bot to update IdleLands and reboot.
+        *
+        * @name idle-update
+        * @gmOnly
+        * @syntax !idle-update
+        * @category IRC Commands
+        * @package Client
+      */`
+      @addRoute 'idle-update', 'idle.game.gm', =>
+        @IdleWrapper.api.gm.data.update()
 
-      @addRoute "idle-add event :eventType \":question\"", "idle.game.gm", (origin, route) =>
-        [eventType, question] = [route.params.eventType, route.params.question]
-
-        if eventType not in ['blessXp', 'forsakeXp', 'blessGold', 'forsakeGold', 'blessItem', 'forsakeItem', 'findItem',
-                             'party', 'battle']
-          @reply origin, "#{eventType} isn't a valid event type."
-          return
-
-        @IdleWrapper.api.add.static eventType, question
-
+      `/**
+        * Ban a player.
+        *
+        * @name idle-ban
+        * @gmOnly
+        * @syntax !idle-ban Player Name
+        * @category IRC Commands
+        * @package Client
+      */`
       @addRoute "idle-ban :playerName", "idle.game.gm", (origin, route) =>
         [name] = [route.params.playerName]
-        @IdleWrapper.api.game.banPlayer name
+        @IdleWrapper.api.gm.status.ban name
 
+      `/**
+        * Unban a player.
+        *
+        * @name idle-unban
+        * @gmOnly
+        * @syntax !idle-unban Player Name
+        * @category IRC Commands
+        * @package Client
+      */`
       @addRoute "idle-unban :playerName", "idle.game.gm", (origin, route) =>
         [name] = [route.params.playerName]
-        @IdleWrapper.api.game.unbanPlayer name
+        @IdleWrapper.api.gm.status.unban name
 
+      `/**
+        * Teleport a player to a given location.
+        *
+        * @name idle-teleportloc
+        * @gmOnly
+        * @syntax !idle-teleportloc "Player Name" locationId
+        * @example !idle-teleport "Swirly" start
+        * @category IRC Commands
+        * @package Client
+      */`
       @addRoute 'idle-teleportloc ":playerName" :location', "idle.game.gm", (origin, route) =>
         [name, location] = [route.params.playerName, route.params.location]
-        @IdleWrapper.api.game.teleport.singleLocation name, location
+        @IdleWrapper.api.gm.teleport.location.single name, location
 
+      `/**
+        * Teleport a player to a given set of coordinates.
+        *
+        * @name idle-teleport
+        * @gmOnly
+        * @syntax !idle-teleport "Player Name" "Map Name" x,y
+        * @example !idle-teleport "Swirly" "Norkos" 10,10
+        * @category IRC Commands
+        * @package Client
+      */`
       @addRoute 'idle-teleport ":playerName" ":map" :x,:y', "idle.game.gm", (origin, route) =>
         [name, map, x, y] = [route.params.playerName, route.params.map, route.params.x, route.params.y]
         x = parseInt x
         y = parseInt y
-        @IdleWrapper.api.game.teleport.single name, map, x, y
+        @IdleWrapper.api.gm.teleport.map.single name, map, x, y
 
+      `/**
+        * Teleport all players to a given location.
+        *
+        * @name idle-massteleportloc
+        * @gmOnly
+        * @syntax !idle-massteleportloc locationId
+        * @example !idle-massteleportloc norkos
+        * @category IRC Commands
+        * @package Client
+      */`
       @addRoute "idle-massteleportloc :location", "idle.game.gm", (origin, route) =>
         [location] = [route.params.location]
-        @IdleWrapper.api.game.teleport.massLocation location
+        @IdleWrapper.api.gm.teleport.map.location location
 
+      `/**
+        * Teleport all players to a given set of coordinates.
+        *
+        * @name idle-massteleport
+        * @gmOnly
+        * @syntax !idle-massteleport "Map Name" x,y
+        * @example !idle-massteleport "Norkos" 10,10
+        * @category IRC Commands
+        * @package Client
+      */`
       @addRoute 'idle-massteleport ":map" :x,:y', "idle.game.gm", (origin, route) =>
         [map, x, y] = [route.params.map, route.params.x, route.params.y]
         x = parseInt x
         y = parseInt y
-        @IdleWrapper.api.game.teleport.mass map, x, y
+        @IdleWrapper.api.gm.teleport.map.mass map, x, y
 
-      @addRoute "idle-add item :itemOrDescType \":name\" *", "idle.game.gm", (origin, route) =>
-        [type, name, parameters] = [route.params.itemOrDescType, route.params.name, route.splats[0]]
+      `/**
+        * Generate a custom item for a player.
+        *
+        * @name idle-itemgen
+        * @gmOnly
+        * @syntax !idle-itemgen "Player Name" itemSlot "name" stats
+        * @example !idle-itemgen "Swirly" mainhand "Epic Cheat" luck=10000
+        * @category IRC Commands
+        * @package Client
+      */`
+      @addRoute 'idle-itemgen ":player" :type *', "idle.game.gm", (origin, route) =>
+        [playerName, itemType, itemData] = [route.params.player, route.params.type, route.splats[0]]
+        @IdleWrapper.api.gm.player.createItem playerName, itemType, itemData
 
-        if type not in ['prefix', 'suffix', 'prefix-special',
-                        'body', 'charm', 'feet', 'finger', 'hands', 'head', 'legs', 'neck', 'offhand', 'mainhand']
-          @reply origin, "#{type} isn't a valid type."
-          return
+      `/**
+       * Give a player some gold.
+       *
+       * @name idle-goldgive
+       * @gmOnly
+       * @syntax !idle-itemgen "Player Name" gold
+       * @example !idle-itemgen "Swirly" 10000
+       * @category IRC Commands
+       * @package Client
+       */`
+      @addRoute 'idle-goldgive ":player" :gold', "idle.game.gm", (origin, route) =>
+        [playerName, gold] = [route.params.player, route.params.gold]
+        @IdleWrapper.api.gm.player.giveGold playerName, parseInt gold
 
-        parameters = _.map (parameters.split ' '), (item) ->
-          arr = item.split '='
-          retval = {}
-          retval[arr[0]] = (parseInt arr[1]) ? null
-          retval
-        .reduce (cur, prev) ->
-          _.extend prev, cur
-        , { name: name, type: type }
-
-        @IdleWrapper.api.add.item parameters, (error) =>
-          @reply origin, "You cannot have a duplicate name (#{error.name})." if error.name
-          @reply origin, "It doesn't make sense to have the same stats twice." if error.stats
-
-      @addRoute "idle-personality :action(remove|add) :personality", (origin, route) =>
+      `/**
+        * Modify your personality settings.
+        *
+        * @name idle-personality
+        * @syntax !idle-personality add|remove Personality
+        * @example !idle-personality add ScaredOfTheDark
+        * @example !idle-personality remove ScaredOfTheDark
+        * @category IRC Commands
+        * @package Client
+      */`
+      @addRoute "idle-personality :action(add|remove) :personality", (origin, route) =>
         [bot, action, personality] = [origin.bot, route.params.action, route.params.personality]
         bot.userManager.getUsername origin, (e, username) =>
           if not username
@@ -370,13 +494,11 @@ module.exports = (Module) ->
 
           identifier = @generateIdent origin.bot.config.server, username
 
-          msg = @IdleWrapper.api[action].personality identifier, personality
-          if not msg
-            @reply origin, "Could not #{action} the personality \"#{personality}\""
-          else
-            @reply origin, "Successfully updated your personality settings."
+          (@IdleWrapper.api.player.personality[action] identifier, personality)
+          .then (res) =>
+            @reply origin, res.message
 
-      @addRoute "idle-string :action(remove|add) :type :string?", (origin, route) =>
+      stringFunc = (origin, route) =>
         [bot, action, sType, string] = [origin.bot, route.params.action, route.params.type, route.params.string]
         bot.userManager.getUsername origin, (e, username) =>
           if not username
@@ -385,15 +507,453 @@ module.exports = (Module) ->
 
           identifier = @generateIdent origin.bot.config.server, username
 
-          @IdleWrapper.api[action].string identifier, sType, string
-          @reply origin, "Successfully updated your string settings."
+          (@IdleWrapper.api.player.string[action] identifier, sType, string)
+          .then (res) =>
+            @reply origin, res.message
 
-      @addRoute "idle-add all-data", "idle.game.owner", (origin, route) =>
-        @reply origin, "Re-initializing all modifier/event/etc data from disk."
-        @IdleWrapper.api.add.allData()
+      `/**
+        * Modify your string settings.
+        *
+        * @name idle-string
+        * @syntax !idle-string add|remove type [stringData]
+        * @example !idle-string set web This is my web string
+        * @example !idle-string remove web
+        * @category IRC Commands
+        * @package Client
+      */`
+      @addRoute "idle-string :action(set) :type :string", stringFunc
+      @addRoute "idle-string :action(remove) :type", stringFunc
 
-      @addRoute "idle-broadcast :message", "idle.game.owner", (origin, route) =>
-        @broadcast route.params.message
+      pushbulletFunc = (origin, route) =>
+        [bot, action, string] = [origin.bot, route.params.action, route.params.string]
+        bot.userManager.getUsername origin, (e, username) =>
+          if not username
+            @reply origin, "You must be logged in to change your string settings!"
+            return
+
+          identifier = @generateIdent origin.bot.config.server, username
+
+          (@IdleWrapper.api.player.pushbullet[action] identifier, string)
+          .then (res) =>
+            @reply origin, res.message
+
+      `/**
+        * Modify your PushBullet settings.
+        *
+        * @name idle-pushbullet
+        * @syntax !idle-pushbullet set|remove [pushbulletApiKey]
+        * @example !idle-pushbullet set ThisIsAnAPIKey
+        * @example !idle-pushbullet remove
+        * @category IRC Commands
+        * @package Client
+      */`
+      @addRoute "idle-pushbullet :action(set) :string", pushbulletFunc
+      @addRoute "idle-pushbullet :action(remove)", pushbulletFunc
+
+      `/**
+        * Modify your priority point settings.
+        *
+        * @name idle-priority
+        * @syntax !idle-priority add|remove stat points
+        * @example !idle-priority add str 1
+        * @example !idle-priority remove str 1
+        * @category IRC Commands
+        * @package Client
+      */`
+      @addRoute "idle-priority :action(add|remove) :stat :points", (origin, route) =>
+        [bot, action, stat, points] = [origin.bot, route.params.action, route.params.stat, route.params.points]
+        bot.userManager.getUsername origin, (e, username) =>
+          if not username
+            @reply origin, "You must be logged in to change your priority settings!"
+            return
+
+          identifier = @generateIdent origin.bot.config.server, username
+
+          (@IdleWrapper.api.player.priority[action] identifier, stat, points)
+          .then (res) =>
+            @reply origin, res.message
+
+      `/**
+        * Modify your gender settings.
+        *
+        * @name idle-gender
+        * @syntax !idle-gender newGender
+        * @example !idle-gender male
+        * @category IRC Commands
+        * @package Client
+      */`
+      @addRoute "idle-gender :newGender", (origin, route) =>
+        gender = route.params.newGender
+        origin.bot.userManager.getUsername origin, (e, username) =>
+          if not username
+            @reply origin, "You must be logged in to change your string settings!"
+            return
+
+          identifier = @generateIdent origin.bot.config.server, username
+
+          @IdleWrapper.api.player.gender.set identifier, gender
+          .then (ret) =>
+            @reply origin, ret.message
+
+      `/**
+        * Modify your inventory.
+        *
+        * @name idle-inventory
+        * @syntax !idle-inventory swap|sell|add slot
+        * @example !idle-inventory add mainhand
+        * @example !idle-inventory swap 0
+        * @example !idle-inventory sell 0
+        * @category IRC Commands
+        * @package Client
+      */`
+      @addRoute "idle-inventory :action(swap|sell|add) :slot", (origin, route) =>
+        [action, slot] = [route.params.action, route.params.slot]
+        slot = parseInt slot if action isnt "add"
+
+        origin.bot.userManager.getUsername origin, (e, username) =>
+          if not username
+            @reply origin, "You must be logged in to change your inventory settings!"
+            return
+
+          identifier = @generateIdent origin.bot.config.server, username
+
+          (@IdleWrapper.api.player.overflow[action] identifier, slot)
+          .then (res) =>
+            @reply origin, res.message
+
+      `/**
+        * Purchase something from a nearby shop (if you're near one, of course).
+        *
+        * @name idle-shop
+        * @syntax !idle-shop buy slot
+        * @example !idle-shop buy 0
+        * @category IRC Commands
+        * @package Client
+      */`
+      @addRoute "idle-shop buy :slot", (origin, route) =>
+        [slot] = [route.params.slot]
+        slot = parseInt slot
+
+        origin.bot.userManager.getUsername origin, (e, username) =>
+          if not username
+            @reply origin, "You must be logged in to buy from a shop!"
+            return
+
+          identifier = @generateIdent origin.bot.config.server, username
+
+          (@IdleWrapper.api.player.shop.buy identifier, slot)
+          .then (res) =>
+            @reply origin, res.message
+
+      `/**
+        * Create a new guild. Costs 100k.
+        *
+        * @name Guild Creation
+        * @syntax !idle-guild create guildName
+        * @example !idle-guild create Leet Admin Hax
+        * @category IRC Commands
+        * @package Client
+      */`
+      @addRoute "idle-guild create :guildName", (origin, route) =>
+        [guildName] = [route.params.guildName]
+
+        origin.bot.userManager.getUsername origin, (e, username) =>
+          if not username
+            @reply origin, "You must be logged in to create a guild!"
+            return
+
+          identifier = @generateIdent origin.bot.config.server, username
+
+          (@IdleWrapper.api.player.guild.create identifier, guildName)
+          .then (res) =>
+            @reply origin, res.message
+
+      `/**
+        * Manage guild members.
+        *
+        * @name Guild Management
+        * @syntax !idle-guild invite|promote|demote|kick Player Name
+        * @example !idle-guild invite Swirly
+        * @example !idle-guild promote Swirly
+        * @example !idle-guild demote Swirly
+        * @example !idle-guild kick Swirly
+        * @category IRC Commands
+        * @package Client
+      */`
+      @addRoute "idle-guild :action(invite|promote|demote|kick) :playerName", (origin, route) =>
+        [action, playerName] = [route.params.action, route.params.playerName]
+
+        origin.bot.userManager.getUsername origin, (e, username) =>
+          if not username
+            @reply origin, "You must be logged in to administer a guild!"
+            return
+
+          identifier = @generateIdent origin.bot.config.server, username
+
+          (@IdleWrapper.api.player.guild[action] identifier, playerName)
+          .then (res) =>
+            @reply origin, res.message
+
+      `/**
+        * Manage your guild status.
+        *
+        * @name Guild Status
+        * @syntax !idle-guild leave|disband
+        * @example !idle-guild leave
+        * @example !idle-guild disband
+        * @category IRC Commands
+        * @package Client
+      */`
+      @addRoute "idle-guild :action(leave|disband)", (origin, route) =>
+
+        [action] = [route.params.action]
+
+        origin.bot.userManager.getUsername origin, (e, username) =>
+          if not username
+            @reply origin, "You must be logged in to manage your guild status!"
+            return
+
+          identifier = @generateIdent origin.bot.config.server, username
+
+          (@IdleWrapper.api.player.guild[action] identifier)
+          .then (res) =>
+            @reply origin, res.message
+
+      `/**
+        * Manage your guild invitations.
+        *
+        * @name Guild Invitations
+        * @syntax !idle-guild manage-invite accept|deny guild name
+        * @example !idle-guild manage-invite accept Leet Admin Hax
+        * @example !idle-guild manage-invite deny Leet Admin Hax
+        * @category IRC Commands
+        * @package Client
+      */`
+      @addRoute "idle-guild manage-invite :action(accept|deny) :guildName", (origin, route) =>
+        [action, guildName] = [route.params.action, route.params.guildName]
+
+        origin.bot.userManager.getUsername origin, (e, username) =>
+          if not username
+            @reply origin, "You must be logged in to join a guild!"
+            return
+
+          identifier = @generateIdent origin.bot.config.server, username
+          accepted = action is "accept"
+
+          (@IdleWrapper.api.player.guild.manageInvite identifier, accepted, guildName)
+          .then (res) =>
+            @reply origin, res.message
+
+      `/**
+        * Donate gold to your guild.
+        *
+        * @name Guild Donation
+        * @syntax !idle-guild donate gold
+        * @example !idle-guild donate 1337
+        * @category IRC Commands
+        * @package Client
+      */`
+      @addRoute "idle-guild donate :gold", (origin, route) =>
+        [gold] = [route.params.gold]
+
+        origin.bot.userManager.getUsername origin, (e, username) =>
+          if not username
+            @reply origin, "You must be logged in to donate gold!"
+            return
+
+          identifier = @generateIdent origin.bot.config.server, username
+
+          @IdleWrapper.api.player.guild.donate identifier, parseInt gold
+          .then (res) =>
+            @reply origin, res.message
+
+      `/**
+        * Purchase a buff for your guild.
+        *
+        * @name Guild Buff
+        * @syntax !idle-guild buff "type" tier
+        * @example !idle-guild buff "Strength" 1
+        * @category IRC Commands
+        * @package Client
+      */`
+      @addRoute "idle-guild buff \":type\" :tier", (origin, route) =>
+        [type, tier] = [route.params.type, route.params.tier]
+
+        origin.bot.userManager.getUsername origin, (e, username) =>
+          if not username
+            @reply origin, "You must be logged in to buy a guild buff!"
+            return
+
+          identifier = @generateIdent origin.bot.config.server, username
+
+          @IdleWrapper.api.player.guild.buff identifier, type, parseInt tier
+          .then (res) =>
+            @reply origin, res.message
+
+      `/**
+        * Manage your password, or authenticate.
+        *
+        * @name idle-secure
+        * @syntax !idle-secure setPassword|authenticate password
+        * @example !idle-secure setPassword my super secret password
+        * @example !idle-secure authenticate my super secret password
+        * @category IRC Commands
+        * @package Client
+      */`
+      @addRoute "idle-secure :action(setPassword|authenticate) :password", (origin, route) =>
+        [action, password] = [route.params.action, route.params.password]
+
+        origin.bot.userManager.getUsername origin, (e, username) =>
+          if not username
+            @reply origin, "You must be logged in to set a password!"
+            return
+
+          identifier = @generateIdent origin.bot.config.server, username
+
+          (@IdleWrapper.api.player.auth[action] identifier, password)
+          .then (res) =>
+            @reply origin, res.message
+
+      `/**
+       * Buy a new pet.
+       *
+       * @name idle-pet buy
+       * @syntax !idle-pet buy "type" "name" "attr1" "attr2"
+       * @example !idle-pet buy "Pet Rock" "Rocky" "a top hat" "a monocle"
+       * @category IRC Commands
+       * @package Client
+       */`
+      @addRoute "idle-pet buy \":petType\" \":petName\" \":attr1\" \":attr2\"", (origin, route) =>
+        [type, name, attr1, attr2] = [route.params.petType, route.params.petName, route.params.attr1, route.params.attr2]
+
+        origin.bot.userManager.getUsername origin, (e, username) =>
+          if not username
+            @reply origin, "You must be logged in to buy a pet!"
+            return
+
+          identifier = @generateIdent origin.bot.config.server, username
+
+          (@IdleWrapper.api.player.pet.buy identifier, type, name, attr1, attr2)
+          .then (res) =>
+            @reply origin, res.message
+
+      `/**
+       * Set smart options for your pet.
+       *
+       * @name idle-pet set
+       * @syntax !idle-pet set option on|off
+       * @example !idle-pet set smartSell on
+       * @example !idle-pet set smartSelf on
+       * @example !idle-pet set smartEquip off
+       * @category IRC Commands
+       * @package Client
+       */`
+      @addRoute "idle-pet set :option :value", (origin, route) =>
+        [option, value] = [route.params.option, route.params.value is "on"]
+
+        origin.bot.userManager.getUsername origin, (e, username) =>
+          if not username
+            @reply origin, "You must be logged in to change pet settings!"
+            return
+
+          identifier = @generateIdent origin.bot.config.server, username
+
+          (@IdleWrapper.api.player.pet.setOption identifier, option, value)
+          .then (res) =>
+            @reply origin, res.message
+
+      `/**
+       * Manage your pets items, upgrade their stats, and feed them gold!
+       *
+       * @name idle-pet action
+       * @syntax !idle-pet action actionType actionParameter
+       * @syntax !idle-pet action upgrade <stat> (maxLevel | inventory | goldStorage | battleJoinPercent | itemFindTimeDuration | itemSellMultiplier | itemFindBonus | itemFindRangeMultiplier | xpPerGold | maxItemScore)
+       * @syntax !idle-pet action giveEquipment itemSlot
+       * @syntax !idle-pet action sellEquipment itemSlot
+       * @syntax !idle-pet action takeEquipment itemSlot
+       * @syntax !idle-pet action changeClass newClass
+       * @syntax !idle-pet action equipItem itemSlot
+       * @syntax !idle-pet action unequipItem itemUid
+       * @syntax !idle-pet action swapToPet petId
+       * @syntax !idle-pet action feed
+       * @syntax !idle-pet action takeGold
+       * @example !idle-pet action upgrade maxLevel
+       * @example !idle-pet action giveEquipment 0
+       * @example !idle-pet action takeEquipment 1
+       * @example !idle-pet action sellEquipment 2
+       * @example !idle-pet action changeClass Generalist
+       * @example !idle-pet action equipItem 3
+       * @example !idle-pet action unequipItem 1418554184641
+       * @example !idle-pet action swapToPet 1418503227081
+       * @category IRC Commands
+       * @package Client
+       */`
+      @addRoute "idle-pet action :action(feed|takeGold)", (origin, route) =>
+        [action] = [route.params.action]
+
+        origin.bot.userManager.getUsername origin, (e, username) =>
+          if not username
+            @reply origin, "You must be logged in to change pet settings!"
+            return
+
+          identifier = @generateIdent origin.bot.config.server, username
+
+          (@IdleWrapper.api.player.pet[action]? identifier)
+          .then (res) =>
+            @reply origin, res.message
+
+      @addRoute "idle-pet action :action :param", (origin, route) =>
+        [action, param] = [route.params.action, route.params.param]
+        param = parseInt param if not (action in ["upgrade", "changeClass"])
+
+        origin.bot.userManager.getUsername origin, (e, username) =>
+          if not username
+            @reply origin, "You must be logged in to change pet settings!"
+            return
+
+          identifier = @generateIdent origin.bot.config.server, username
+
+          (@IdleWrapper.api.player.pet[action]? identifier, param)?.then (res) =>
+            @reply origin, res.message
+
+      `/**
+       * Manage custom data for the game.
+       *
+       * @name idle-customdata
+       * @gmOnly
+       * @syntax !idle-customdata <command> (init | update)
+       * @category IRC Commands
+       * @package Client
+       */`
+      @addRoute "idle-customdata :action", "idle.game.gm", (origin, route) =>
+        [action] = [route.params.action]
+
+        origin.bot.userManager.getUsername origin, (e, username) =>
+          if not username
+            @reply origin, "You must be logged in to manage custom data!"
+            return
+
+          @IdleWrapper.api.gm.custom[action]?()
+
+      `/**
+       * Manage moderators for managing custom data for the game.
+       *
+       * @name idle-custommod
+       * @gmOnly
+       * @syntax !idle-custommod "<user-identifier>" status
+       * @example !idle-custommod "local-server/Danret" 1
+       * @category IRC Commands
+       * @package Client
+       */`
+      @addRoute "idle-custommod \":identifier\" :mod", "idle.game.gm", (origin, route) =>
+        [identifier, modStatus] = [route.params.identifier, parseInt route.params.mod]
+
+        origin.bot.userManager.getUsername origin, (e, username) =>
+          if not username
+            @reply origin, "You must be logged in to manage custom mods!"
+            return
+
+          @IdleWrapper.api.gm.custom.modModerator identifier, modStatus
 
       @initialize()
 

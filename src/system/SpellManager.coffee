@@ -1,5 +1,5 @@
 
-_ = require "underscore"
+_ = require "lodash"
 requireDir = require "require-dir"
 spells = requireDir "../character/spells", recurse: yes
 Spell = require "../character/base/Spell"
@@ -18,14 +18,31 @@ class SpellManager
     loadSpellObject spells
 
 SpellManager::getSpellsAvailableFor = (player) ->
+
+  hasCollectibles = (collectibles = []) ->
+    hasAll = yes
+
+    _.each collectibles, (collectible) ->
+      hasAll = no if not _.findWhere player.collectibles, {name: collectible}
+
+    hasAll
+
   _.filter @spells, (realSpell) ->
+    # Check highest usable tier of each spell
+    return no if realSpell.tiers.length is 0
 
-    realSpell.cost = realSpell.cost.bind null, player if _.isFunction realSpell.cost
+    spellTier = _.reject (_.compact realSpell.tiers), (tier) ->
+      (tier.level > player.level.getValue()) or (player.professionName isnt tier.class) or (not player.isMonster and not (hasCollectibles tier.collectibles))
 
-    (player.professionName of realSpell.restrictions) and
-    (player.level.getValue() >= realSpell.restrictions[player.professionName]) and
-    (player[realSpell.stat].getValue() >= _.result realSpell, 'cost') and
-    (realSpell.canChoose player)
+    spellTier = _.max spellTier, (tier) -> tier.level
+
+    return no if not spellTier
+
+    if _.isFunction spellTier.cost
+      realSpell.cost = spellTier.cost.bind null, player
+      (player[realSpell.stat].getValue() >= _.result realSpell, 'cost') and (realSpell.canChoose player)
+    else
+      (player[realSpell.stat].getValue() >= spellTier.cost) and (realSpell.canChoose player)
 
 SpellManager::getStatusEffects = ->
   _.filter @spells, (realSpell) -> realSpell.isStatusEffect

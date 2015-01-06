@@ -1,6 +1,9 @@
 
 MessageCreator = require "./MessageCreator"
-_ = require "underscore"
+_ = require "lodash"
+Equipment = require "../item/Equipment"
+
+teleports = require "../../config/teleports.json"
 
 class GMCommands
   constructor: (@game) ->
@@ -21,6 +24,7 @@ class GMCommands
 
     playerTile = player.getTileAt()
     player.handleTile playerTile
+    player.checkShop()
 
   massTeleportLocation: (locationTitle) ->
     location = @lookupLocation locationTitle
@@ -33,68 +37,38 @@ class GMCommands
   lookupLocation: (name) ->
     @locations[name]
 
-  locations:
-    "start":
-      map: "Norkos"
-      formalName: "the Start Location"
-      x: 10
-      y: 10
-    "jail":
-      map: "Norkos"
-      formalName: "Jail"
-      x: 13
-      y: 44
+  createItemFor: (player, type, itemParams) ->
 
-    "cleric":
-      map: "Norkos"
-      formalName: "the Cleric Trainer"
-      x: 38
-      y: 23
-    "fighter":
-      map: "Norkos"
-      formalName: "the Fighter Trainer"
-      x: 43
-      y: 23
-    "mage":
-      map: "Norkos"
-      formalName: "the Mage Trainer"
-      x: 47
-      y: 23
-    "barbarian":
-      map: "Norkos"
-      formalName: "the Barbarian Trainer"
-      x: 112
-      y: 14
-    "bard":
-      map: "Bard Island -1"
-      formalName: "the Bard Trainer"
-      x: 4
-      y: 4
-    "jester":
-      map: "Norkos Dungeon -5"
-      formalName: "the Jester Trainer"
-      x: 39
-      y: 43
-    "rogue":
-      map: "Norkos Prison -1"
-      formalName: "the Rogue Trainer"
-      x: 34
-      y: 1
+    params = @game.componentDatabase.parseItemString itemParams, type, yes
+    item = new Equipment params
+    item.itemClass = 'custom'
 
-    "fisheries":
-      map: "Norkos"
-      formalName: "the Fisheries"
-      x: 35
-      y: 70
-    "boathouse":
-      map: "Norkos"
-      formalName: "the Boathouse"
-      x: 10
-      y: 88
-    "prison":
-      map: "Norkos"
-      formalName: "Norkos Prison"
-      x: 92
-      y: 11
+    player.forceIntoOverflow item
+
+  arrangeBattle: (playerList) ->
+    teams = []
+    for team in playerList
+      newTeam = []
+      for playerName in team
+        newTeam.push @game.playerManager.getPlayerByName playerName
+      teams.push newTeam
+    @game.arrangeBattle teams
+
+  initializeCustomData: ->
+    require('git-clone') 'https://github.com/IdleLands/Custom-Assets', "#{__dirname}/../../assets/custom", ->
+
+  updateCustomData: (cb = ->) ->
+    require("git-pull") "#{__dirname}/../../assets/custom", cb
+
+  setModeratorStatus: (identifier, status) ->
+    player = @game.playerManager.getPlayerById identifier
+    player?.isContentModerator = status
+
+  locations: _.extend {},
+    teleports.towns,
+    teleports.bosses,
+    teleports.dungeons,
+    teleports.trainers,
+    teleports.other
 
 module.exports = exports = GMCommands

@@ -4,23 +4,54 @@ Spell = require "../../../base/Spell"
 class LitanyOfPain extends Spell
   name: "Litany of Pain"
   @element = LitanyOfPain::element = Spell::Element.energy
-  @cost = LitanyOfPain::cost = 300
-  @restrictions =
-    "Bard": 15
+  @tiers = LitanyOfPain::tiers = [
+    `/**
+      * This spell does damage upfront and over time.
+      *
+      * @name Litany of Pain
+      * @requirement {class} Bard
+      * @requirement {mp} 300
+      * @requirement {level} 15
+      * @element energy
+      * @targets {enemy} all
+      * @minDamage [int/5]
+      * @maxDamage [int/2]
+      * @duration 3 rounds
+      * @category Bard
+      * @package Spells
+    */`
+    {name: "Litany of Pain", spellPower: 1, cost: 300, class: "Bard", level: 15}
+    `/**
+      * This spell does damage upfront and over time.
+      *
+      * @name Hymn of Torment
+      * @requirement {class} Bard
+      * @requirement {mp} 600
+      * @requirement {level} 40
+      * @element energy
+      * @targets {enemy} all
+      * @minDamage [int/5]*2
+      * @maxDamage [int/2]*2
+      * @duration 4 rounds
+      * @category Bard
+      * @package Spells
+    */`
+    {name: "Hymn of Torment", spellPower: 2, cost: 600, class: "Bard", level: 40}
+  ]
 
-  calcDuration: -> super()+3
+  calcDuration: -> super()+2+@spellPower
   
   calcDamage: ->
-    minInt = (@caster.calc.stat 'int')/5
-    maxInt = (@caster.calc.stat 'int')/3
+    minInt = @spellPower*(@caster.calc.stat 'int')/5
+    maxInt = @spellPower*(@caster.calc.stat 'int')/2
     super() + @minMax minInt, maxInt
 
   determineTargets: ->
     @targetAllEnemies()
 
-  cast: (player) ->
-    message = "%casterName begins playing \"%spellName\" at %targetName!"
-    @broadcast player, message
+  init: ->
+    message = "%casterName begins playing \"%spellName!\""
+    @broadcast @caster, message
 
   tick: (player) ->
     damage = @calcDamage()
@@ -28,15 +59,14 @@ class LitanyOfPain extends Spell
     @doDamageTo player, damage, message
 
   uncast: (player) ->
-    return if @caster isnt player
     message = "%targetName is no longer under the effects of \"%spellName.\""
-    @broadcast player message
+    @broadcast player, message
 
   constructor: (@game, @caster) ->
     super @game, @caster
     @bindings =
-      doSpellCast: @cast
+      doSpellInit: @init
       doSpellUncast: @uncast
-      "combat.self.turn.start": @tick
+      "combat.round.start": @tick
 
 module.exports = exports = LitanyOfPain

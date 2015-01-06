@@ -2,10 +2,17 @@ module.exports = (grunt) ->
 
   grunt.task.loadNpmTasks 'grunt-contrib-watch'
   grunt.task.loadNpmTasks 'grunt-coffeelint'
+  grunt.task.loadNpmTasks 'grunt-gh-pages'
 
   grunt.initConfig
     pkg:
       grunt.file.readJSON 'package.json'
+
+    'gh-pages':
+      src: ['**']
+      options:
+        base: 'doks'
+        add: yes
 
     coffeelint:
       dist:
@@ -14,6 +21,8 @@ module.exports = (grunt) ->
 
       options:
         max_line_length:
+          level: 'ignore'
+        no_backticks:
           level: 'ignore'
 
     watch:
@@ -25,4 +34,4 @@ module.exports = (grunt) ->
     grunt.log.write msg
 
   grunt.registerTask 'default', [ 'coffeelint' ]
-  grunt.registerTask 'dev', [ 'watch' ]
+  grunt.registerTask 'dev', [ 'coffeelint', 'watch' ]

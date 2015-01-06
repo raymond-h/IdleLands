@@ -1,5 +1,5 @@
 
-_ = require "underscore"
+_ = require "lodash"
 MessageCreator = require "../../system/MessageCreator"
 
 class Spell
@@ -9,7 +9,9 @@ class Spell
   stat: @stat = "mp"
   oper: @oper = "sub"
   cost: @cost = 0
-  stack: "duration"
+  tiers: @tiers = []
+  spellPower: @spellPower = 1
+  stack: "refresh"
   bindings:
     doSpellCast: ->
     doSpellUncast: ->
@@ -24,8 +26,17 @@ class Spell
       .reject (member) -> member.hp.atMax()
       .value()
 
+  deadPartyMembers = @deadPartyMembers = (player) ->
+    return [] if not player.party
+    _.chain player.party.players
+    .filter (member) -> member.hp.atMin()
+    .value()
+
   @areAnyPartyMembersBelowMaxHealth = (player) ->
     gpmbmh(player).length > 0
+
+  @areAnyPartyMembersDead = (player) ->
+    deadPartyMembers(player).length > 0
 
   ## / utility chooser functions
 
@@ -45,8 +56,12 @@ class Spell
     options = _.defaults options, {includeLiving: yes, includeDead: no}
     _.chain @baseTargets
     .reject (target) -> target.fled
-    .reject (target) -> target.hp.atMin() and not options.includeDead
-    .filter (target) -> not target.hp.atMin() and options.includeLiving
+    .filter (target) ->
+      return yes if not options.includeDead
+      target.hp.atMin()
+    .filter (target) ->
+      return yes if not options.includeLiving
+      not target.hp.atMin()
     .value()
 
   targetAll: (options) ->
@@ -79,6 +94,18 @@ class Spell
 
   ## / targetting functions
 
+  calcTier: (player) ->
+    tiers = _.compact @tiers
+    return if tiers.length is 0
+    spellTier = _.reject tiers, (tier) -> (tier.level > player.level.getValue()) or (player.professionName != tier.class)
+    spellTier = _.max spellTier, (tier) -> tier.level
+    @name = spellTier.name
+    @spellPower = spellTier.spellPower
+    if _.isFunction spellTier.cost
+      @cost = spellTier.cost.bind null, @caster
+    else
+      @cost = spellTier.cost
+
   calcDuration: (player) -> @bonusElementRanking
 
   calcDamage: ->
@@ -98,49 +125,67 @@ class Spell
       targetName: player.name
       spellName: @name
 
+    damage = Math.round player.calcDamageTaken damage
+
     message = MessageCreator.doStringReplace message, @caster, extra
 
     @caster.party?.currentBattle?.takeHp @caster, player, damage, @determineType(), @, message
 
-  prepareCast: ->
-    targets = @determineTargets()
+  prepareCast: (enemies = null) ->
+    enemies = @determineTargets() if not enemies
+
+    enemies = [enemies] if not _.isArray enemies
+    targets = @caster.calc.magicalAttackTargets enemies, @baseTargets
     @affect targets
 
-  affect: (affected = []) ->
-    @affected = if affected and not _.isArray affected then [affected] else affected
+  affect: (@affected = []) ->
     battleInstance = @caster.party.currentBattle
+
+    (@bindings.doSpellInit.apply @, []) if 'doSpellInit' of @bindings
+
+    @baseTurns = {}
+    @turns = {}
+    turns = {}
+
     _.each @affected, (player) =>
-      @baseTurns = @turns = turns = @calcDuration player
+      if not player
+        @game.errorHandler.captureException (new Error "INVALID PLAYER for #{@baseName}: #{player?.name}")
+        return
+
+      @baseTurns[player.name] = @turns[player.name] = turns[player.name] = @calcDuration player
       battleInstance.emitEvents "skill.use", "skill.used", @caster, player, skill: @
       battleInstance.emitEvents "skill.#{@determineType()}.use", "skill.#{@determineType()}.used", @caster, player, skill: @
-      if turns is 0
+      if turns[player.name] is 0
         (@bindings.doSpellCast.apply @, [player]) if 'doSpellCast' of @bindings
       else
-        oldSpell = _.findWhere player.spellsAffectedBy, name: @name
-        if oldSpell and @stack is "duration"
-          oldSpell.turns = oldSpell.calcDuration player
-          battleInstance.emitEvents "skill.duration.refresh", "skill.duration.refreshed", @caster, player, skill: oldSpell, turns: oldSpell.turns
+        oldSpell = _.findWhere player.spellsAffectedBy, baseName: @baseName
+
+        if oldSpell and @stack is "refresh"
+          return
+          oldSpell.suppressed = yes
+          oldSpell.unaffect player
+          battleInstance.emitEvents "skill.duration.refresh", "skill.duration.refreshed", @caster, player, skill: @, turns: @turns
 
         else
-          player?.spellsAffectedBy = [] if not player?.spellsAffectedBy
+          player?.spellsAffectedBy = [] if not player?.spellsAffectedBy or not _.isArray player?.spellsAffectedBy
           player?.spellsAffectedBy.push @ # got an error here once
           battleInstance.emitEvents "skill.duration.begin", "skill.duration.beginAt", @caster, player, skill: @, turns: @turns
 
-          eventList = _.keys _.omit @bindings, 'doSpellCast', 'doSpellUncast'
-          #this would normalize turns / event, but eh, not necessary atm?
-          #@turns *= eventList.length
+          @eventList = _.keys _.omit @bindings, 'doSpellCast', 'doSpellUncast', 'doSpellInit'
           me = @
-          _.each eventList, (event) ->
+          @eventFunctions = {}
+          _.each @eventList, (event) ->
             newFunc = ->
-              me.bindings[event].apply me, arguments
+              return if not (me in player.spellsAffectedBy)
+              me.bindings[event].apply me, [player]
               me.decrementTurns player
 
-            player.many event, turns+1, newFunc
+            player.many event, turns[player.name], newFunc
 
         (@bindings.doSpellCast.apply @, [player]) if 'doSpellCast' of @bindings
 
   decrementTurns: (player) ->
-    if --@turns < 0
+    if --@turns[player.name] <= 0
       @unaffect player
 
   unaffect: (player) ->
@@ -158,7 +203,7 @@ class Spell
       casterName: @caster.name
 
     newMessage = MessageCreator.doStringReplace message, @caster, extra
-    @game.broadcast MessageCreator.genericMessage newMessage+" [<spell.turns>#{@turns}</spell.turns> turns]" if (@turns > 0 and @turns isnt @baseTurns) and (not @suppressed)
+    @game.currentBattle?.broadcast newMessage+" [<spell.turns>#{@turns[target.name]}</spell.turns> turns]" if (@turns[target.name] > 0 and @turns[target.name] isnt @baseTurns[target.name]) and (not @suppressed)
 
   broadcast: (target, message) ->
     extra =
@@ -167,17 +212,20 @@ class Spell
       casterName: @caster.name
 
     newMessage = MessageCreator.doStringReplace message, @caster, extra
-    @game.broadcast MessageCreator.genericMessage newMessage if not @suppressed
+    @game.currentBattle?.broadcast newMessage if not @suppressed and not target.fled
 
   constructor: (@game, @caster, @forcedTargets = null) ->
     @baseName = @name
     @baseTargets = @caster.party.currentBattle.turnOrder
-
-    @cost = @cost.bind null, @caster if _.isFunction @cost
+    @calcTier @caster
     @caster[@stat][@oper] _.result @, 'cost'
     @chance = new (require "chance")()
 
-    console.error "ERROR NO CASTER FOR #{@name}" if not @caster
+    premsg = @caster.messages?[@__proto__.constructor.name]
+    message = "<#{@caster.name}> #{premsg}"
+    @game.currentBattle?.broadcast @caster, message if premsg
+
+    @game.errorHandler.captureMessage "ERROR NO CASTER FOR #{@name}" if not @caster
 
 Spell::Element =
   none: 0

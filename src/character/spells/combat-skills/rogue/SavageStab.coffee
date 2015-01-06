@@ -1,20 +1,37 @@
 
 Spell = require "../../../base/Spell"
-_ = require "underscore"
+_ = require "lodash"
 
 class SavageStab extends Spell
   name: "savage stab"
   stat: @stat = "special"
   @element = SavageStab::element = Spell::Element.physical
-  @cost = SavageStab::cost = 30
-  @restrictions =
-    "Rogue": 45
+  @tiers = SavageStab::tiers = [
+    `/**
+      * This skill does very little damage, but leaves every combat effect available on the target.
+      * Currently, it will inflict Prone, Poison, Venom, and Shatter on the target. It's pretty nasty.
+      *
+      * @name savage stab
+      * @requirement {class} Rogue
+      * @requirement {Stamina} 30
+      * @requirement {level} 45
+      * @element physical
+      * @targets {enemy} 1
+      * @prerequisite {used-skill} wombo combo
+      * @prerequisite {used-skill} heartbleed
+      * @minDamage 0.05*[str+dex]/2
+      * @maxDamage 0.15*[str+dex]/2
+      * @category Rogue
+      * @package Spells
+    */`
+    {name: "savage stab", spellPower: 1, cost: 30, class: "Rogue", level: 45}
+  ]
 
   @canChoose = (caster) -> caster.profession.lastComboSkill in ['heartbleed', 'wombo combo']
 
   calcDamage: ->
-    minStat = (@caster.calc.stats ['str', 'dex']) * 0.05
-    maxStat = (@caster.calc.stats ['str', 'dex']) * 0.15
+    minStat = ((@caster.calc.stats ['str', 'dex']) / 2) * 0.05
+    maxStat = ((@caster.calc.stats ['str', 'dex']) / 2) * 0.15
     super() + @minMax minStat, maxStat
 
   cast: (player) ->
